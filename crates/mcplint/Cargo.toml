@@ -1,0 +1,12 @@
+[package]
+name = "mcplint"
+description = "Checks an MCP capability snapshot against the spec's static per-tool rules."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+schemadiff = { path = "../schemadiff" }

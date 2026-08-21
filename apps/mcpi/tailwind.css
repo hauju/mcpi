@@ -1,0 +1,206 @@
+@import "tailwindcss";
+@plugin "daisyui";
+
+/* ── Devtool dark ──
+   One theme, not two. This is a tool that sits open next to a terminal all day
+   and the palette is tuned for that: near-black chrome so the data is the only
+   bright thing on screen, and severity colours (amber / red / green) reserved
+   exclusively for diff classification so they never compete with UI state.
+   Radii are tighter than the marketing site's — dense rows, not cards. */
+
+@plugin "daisyui/theme" {
+    name: "dark";
+    default: true;
+    prefersdark: true;
+    color-scheme: dark;
+    --color-base-100: #0b0f16;
+    --color-base-200: #111823;
+    --color-base-300: #1b2431;
+    --color-base-content: #dbe4ee;
+    --color-primary: #4ca6ff;
+    --color-primary-content: #04121f;
+    --color-secondary: #7c8cf8;
+    --color-secondary-content: #0a0f2a;
+    --color-accent: #22d3ee;
+    --color-accent-content: #04212a;
+    --color-neutral: #1f2937;
+    --color-neutral-content: #dbe4ee;
+    --color-info: #38bdf8;
+    --color-info-content: #04212a;
+    --color-success: #4ade80;
+    --color-success-content: #052b16;
+    --color-warning: #e8b04a;
+    --color-warning-content: #2a1d05;
+    --color-error: #f87171;
+    --color-error-content: #2a0a0a;
+    --radius-box: 0.5rem;
+    --radius-field: 0.375rem;
+    --radius-selector: 0.375rem;
+    --depth: 0;
+    --border: 1px;
+}
+
+@source "./src/**/*.{rs,html,css}";
+
+@theme {
+    --font-sans:
+        ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    /* Schemas, URIs and payloads are all read as code. */
+    --font-mono:
+        ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    /* One step below base-100: the sidebar rail sits *behind* the two work
+       surfaces, so the eye reads library → contract → item as rising depth. */
+    --color-well: #070b12;
+}
+
+@layer base {
+    html,
+    body {
+        height: 100%;
+        overflow: hidden;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    /* A desktop chrome, not a web page: text selection is for data only. */
+    body {
+        user-select: none;
+        cursor: default;
+    }
+
+    code,
+    pre,
+    .selectable {
+        user-select: text;
+    }
+
+    /* Disclosure chevrons are drawn by hand (rotated Lucide glyphs), so the
+       browser's triangle would double up. */
+    summary {
+        list-style: none;
+    }
+    summary::-webkit-details-marker {
+        display: none;
+    }
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+}
+@keyframes rise-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px) scale(0.99);
+    }
+}
+
+@layer components {
+    /* Thin scrollbars so a three-pane layout does not lose 15px per pane. */
+    .scroll-pane {
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: var(--color-base-300) transparent;
+    }
+
+    /* One row in the server list or the item list. */
+    .row {
+        @apply flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm
+               cursor-default transition-colors duration-75;
+    }
+    .row:hover {
+        background-color: color-mix(
+            in oklab,
+            var(--color-base-200) 85%,
+            transparent
+        );
+    }
+    .row:focus-visible {
+        outline: 1px solid
+            color-mix(in oklab, var(--color-primary) 60%, transparent);
+        outline-offset: -1px;
+    }
+    /* Selection is the one UI state allowed an accent: a primary edge, never
+       red/amber/green — those keep their monopoly on severity. */
+    .row-active,
+    .row-active:hover {
+        background-color: color-mix(
+            in oklab,
+            var(--color-primary) 12%,
+            var(--color-base-300)
+        );
+        box-shadow: inset 2px 0 0 var(--color-primary);
+    }
+
+    /* Every pane and section heading shares one voice, so weight differences
+       elsewhere (mono names, severity badges) are the only hierarchy. */
+    .section-label {
+        font-size: 0.6875rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+    }
+
+    /* Monospace payload well: JSON, schemas, tool output. */
+    .code-block {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        line-height: 1.6;
+        background-color: color-mix(
+            in oklab,
+            var(--color-base-300) 40%,
+            transparent
+        );
+        border: 1px solid
+            color-mix(in oklab, var(--color-base-300) 60%, transparent);
+        border-radius: var(--radius-field);
+        padding: 0.75rem;
+        overflow-x: auto;
+        user-select: text;
+    }
+
+    /* Enter-only motion, 120–150ms ease-out. No exit choreography: restraint
+       reads as speed. Overlays fade, panels and the toast rise a few pixels. */
+    @media (prefers-reduced-motion: no-preference) {
+        .overlay-in {
+            animation: fade-in 120ms ease-out;
+        }
+        .dialog-in {
+            animation: rise-in 130ms ease-out;
+        }
+        .toast-in {
+            animation: rise-in 140ms ease-out;
+        }
+    }
+
+    /* JSON tree disclosure. Direct-child selectors, so a closed node inside an
+       open ancestor keeps its own chevron and preview. */
+    .json-node > summary .json-chevron {
+        transition: transform 75ms;
+    }
+    .json-node[open] > summary .json-chevron {
+        transform: rotate(90deg);
+    }
+    .json-node[open] > summary .json-preview {
+        display: none;
+    }
+
+    /* Focus tightens the field's own border instead of throwing DaisyUI's
+       offset halo: a dense form next to a terminal wants precision, not glow. */
+    .input:focus,
+    .input:focus-within,
+    .textarea:focus,
+    .textarea:focus-within,
+    .select:focus {
+        outline: none;
+        border-color: color-mix(
+            in oklab,
+            var(--color-primary) 55%,
+            var(--color-base-300)
+        );
+        box-shadow: 0 0 0 1px
+            color-mix(in oklab, var(--color-primary) 30%, transparent);
+    }
+}

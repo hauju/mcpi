@@ -1,0 +1,19 @@
+[package]
+name = "mcpstore"
+description = "Local SQLite store for saved servers, capability snapshots, call history, and collections."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+blake3 = "1"
+dirs = "6"
+schemadiff = { path = "../schemadiff" }
+keyring = { version = "3", features = ["apple-native"] }

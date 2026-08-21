@@ -1,0 +1,46 @@
+[application]
+name = "mcpi"
+
+# Without this block `dx` bundles with `com.example.mcpi`, which is the sort
+# of placeholder that ships. The identifier is also what macOS keys keychain
+# ACLs and notarization against, so changing it after release invalidates every
+# customer's stored credentials — pick it once.
+[bundle]
+identifier = "app.mcpi.desktop"
+# Generated from assets/logo.svg. To regenerate after a logo change: nest the
+# tile at 824/1024 on a transparent canvas (Apple's icon grid), render each
+# iconset size with rsvg-convert, then `iconutil -c icns`.
+icon = [
+    "icons/32x32.png",
+    "icons/128x128.png",
+    "icons/128x128@2x.png",
+    "icons/icon.icns",
+]
+publisher = "Hauke Jung"
+copyright = "Copyright © 2026 Hauke Jung"
+category = "DeveloperTool"
+short_description = "A native MCP inspector that remembers."
+long_description = """
+Connect to MCP servers, browse their tools, resources and prompts, call them \
+from forms generated off their JSON schemas, and replay anything from history. \
+mcpi keeps a local record of every server's contract, so it can tell you \
+exactly what changed since the last time you connected — and whether it will \
+break your callers.
+"""
+
+[bundle.macos]
+# 11.0 is the oldest macOS with a WebView the app can rely on.
+minimum_system_version = "11.0"
+
+# Required for notarization. Turning it on late is how you discover which
+# entitlements you were missing, so it is on from the first bundle.
+hardened_runtime = true
+
+# Note that `dx build` ignores most of this section — it produces a runnable
+# .app for development only. `dx bundle --release` is what applies it, so any
+# change here has to be verified with a bundle, not a build.
+
+# A path, not an inline table — `[bundle.macos]` maps to a settings type whose
+# `entitlements` is a file reference. See macos/mcpi.entitlements for what is
+# requested and why.
+entitlements = "macos/mcpi.entitlements"

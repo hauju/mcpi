@@ -1,0 +1,25 @@
+[package]
+name = "mcpi-cli"
+description = "CI companion for mcpi: snapshot MCP servers and fail the build on breaking contract changes."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The binary keeps the package name — the desktop app already claims the bare
+# `mcpi` output filename in this workspace's target directory.
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+# `publish` POSTs a snapshot to the directory; rustls so CI images need no
+# system OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+mcpclient = { path = "../../crates/mcpclient" }
+mcplint = { path = "../../crates/mcplint" }
+mcpstore = { path = "../../crates/mcpstore" }
+schemadiff = { path = "../../crates/schemadiff" }

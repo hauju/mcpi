@@ -1,0 +1,45 @@
+[package]
+name = "mcpclient"
+description = "MCP client wrapper over rmcp exposing a cloneable, UI-friendly session handle."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# `io-util` is for the line reader draining a stdio child's stderr.
+tokio = { workspace = true, features = ["process", "io-util"] }
+rmcp = { workspace = true, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "auth",
+] }
+
+# Named here for two reasons: to spell the HTTP client type rmcp's Streamable
+# HTTP transport is generic over, and — load-bearing — to enable TLS.
+#
+# rmcp's `transport-streamable-http-client-reqwest` feature only enables
+# `dep:reqwest`; the TLS backend rides on rmcp's separate `reqwest` feature,
+# which nothing here turns on. Without `rustls` declared explicitly, reqwest
+# compiles with no TLS backend and every `https://` URL fails before a packet
+# leaves the process. Every real MCP server is https, so dropping this breaks
+# the entire remote transport while local `http://127.0.0.1` tests stay green.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+
+# OAuth credentials go to the system keychain, not the local database.
+keyring = { version = "3", features = ["apple-native"] }
+async-trait = "0.1"
+url = "2.5"
+
+schemadiff = { path = "../schemadiff" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
+schemadiff = { path = "../schemadiff" }
+serde_json = { workspace = true }

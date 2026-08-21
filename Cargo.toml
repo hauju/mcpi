@@ -1,0 +1,23 @@
+[workspace]
+# Virtual manifest: the two deliverables live under `apps/`, shared logic under
+# `crates/`. Nothing is built at the root.
+members = ["apps/*", "crates/*"]
+# Virtual workspaces have no edition to infer the resolver from, so state it.
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Hauke Jung <hauke.jung@outlook.de>"]
+license = "MIT"
+repository = "https://github.com/hauju/mcpi"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0.17"
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+
+rmcp = "3.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

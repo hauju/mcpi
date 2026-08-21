@@ -1,0 +1,35 @@
+[package]
+name = "mcpi"
+description = "Native MCP inspector: connect, browse, call, replay, and diff MCP servers."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dioxus = { version = "0.7.9", features = ["desktop", "router"] }
+dioxus-free-icons = { version = "0.10.0", features = ["lucide"] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+tokio = { workspace = true }
+# Diff export copies straight to the system clipboard; the WebView's
+# `navigator.clipboard` needs a secure context we cannot promise it.
+arboard = { version = "3", default-features = false }
+
+mcpclient = { path = "../../crates/mcpclient" }
+mcpstore = { path = "../../crates/mcpstore" }
+schemadiff = { path = "../../crates/schemadiff" }
+mcplint = { path = "../../crates/mcplint" }
+probe = { path = "../../crates/probe" }
+
+[dev-dependencies]
+# The connect-pipeline tests spawn the mockserver fixture over stdio.
+tokio = { workspace = true, features = ["process", "rt-multi-thread"] }

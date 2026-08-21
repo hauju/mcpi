@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+
+jobs:
+  hygiene:
+    name: fmt / machete
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: Install cargo-machete
+        uses: bnjbvr/cargo-machete@main
+
+      - name: cargo machete
+        run: cargo machete
+
+  # The headless half: no WebView, so it runs on Linux and gives contributors
+  # fast feedback. Clippy is per-package rather than --workspace so that
+  # `dioxus/desktop` never resolves into this graph.
+  engine:
+    name: engine (clippy + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: clippy
+        run: cargo clippy -p schemadiff -p mcplint -p mcpclient -p mcpstore -p mockserver -p probe -p mcpi-cli --all-targets -- -D warnings
+
+      # mcpclient's and mcpi-cli's integration tests spawn the mockserver
+      # binary over stdio, so it has to exist before the suites run.
+      - name: build mockserver fixture
+        run: cargo build -p mockserver
+
+      - name: cargo test
+        run: cargo test -p schemadiff -p mcplint -p mcpclient -p mcpstore -p probe -p mcpi-cli
+
+  # The desktop app, on macOS because that is the ship target and because
+  # `dioxus/desktop` needs a system WebView — on Linux that would mean
+  # installing webkit2gtk to test a platform nobody ships yet.
+  app:
+    name: app (clippy + tests)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Node deps
+        run: bun install --frozen-lockfile
+
+      # `asset!()` requires the stylesheet to exist, and it is generated rather
+      # than committed. `dx serve` normally does this.
+      - name: Build Tailwind
+        run: bunx @tailwindcss/cli -i apps/mcpi/tailwind.css -o apps/mcpi/assets/tailwind.css
+
+      - name: clippy
+        run: cargo clippy -p mcpi --all-targets -- -D warnings
+
+      - name: build mockserver fixture
+        run: cargo build -p mockserver
+
+      - name: cargo test
+        run: cargo test -p mcpi
+
+  audit:
+    name: cargo audit (vulnerable deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit
