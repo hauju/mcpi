@@ -132,7 +132,13 @@ pub fn ServerDialog() -> Element {
                                 class: "input input-sm w-full font-mono",
                                 placeholder: "https://example.com/mcp",
                                 value: "{draft.url}",
-                                oninput: move |e| update(draft_signal, |d, v| d.url = v, e.value()),
+                                // Editing the URL retires the verdict below it,
+                                // which was about the previous URL.
+                                oninput: move |e| {
+                                    update(draft_signal, |d, v| d.url = v, e.value());
+                                    let mut report = app.endpoint_report;
+                                    report.set(None);
+                                },
                             }
                         }
                         Field { label: "Headers", hint: "Header: value, one per line",
@@ -157,37 +163,67 @@ pub fn ServerDialog() -> Element {
                 }
 
                 footer { class: "flex items-center gap-2 px-5 py-3 border-t border-base-300",
-                    if let Some(id) = editing {
-                        button {
-                            class: "btn btn-sm btn-ghost text-error",
-                            onclick: move |_| {
-                                app.delete_server(id);
-                                draft_signal.set(None);
-                            },
-                            "Delete"
+                    // Deleting takes two presses: the cascade also drops the
+                    // server's snapshots, call history, and collections, and
+                    // that accumulated record is the one thing a misclick
+                    // cannot bring back.
+                    if let (Some(id), true) = (editing, draft.confirm_delete) {
+                        p { class: "text-xs text-base-content/70",
+                            "Its snapshots, history, and collections go too."
                         }
-                        if draft.kind == DraftKind::Http {
+                        div { class: "ml-auto flex gap-2",
                             button {
                                 class: "btn btn-sm btn-ghost",
-                                title: "Forget the OAuth credentials stored in your keychain for this server",
                                 onclick: move |_| {
-                                    app.sign_out(id);
+                                    if let Some(d) = draft_signal.write().as_mut() {
+                                        d.confirm_delete = false;
+                                    }
+                                },
+                                "Keep"
+                            }
+                            button {
+                                class: "btn btn-sm btn-error",
+                                onclick: move |_| {
+                                    app.delete_server(id);
                                     draft_signal.set(None);
                                 },
-                                "Sign out"
+                                "Delete server"
                             }
                         }
-                    }
-                    div { class: "ml-auto flex gap-2",
-                        button {
-                            class: "btn btn-sm btn-ghost",
-                            onclick: move |_| draft_signal.set(None),
-                            "Cancel"
+                    } else {
+                        if let Some(id) = editing {
+                            button {
+                                class: "btn btn-sm btn-ghost text-error",
+                                onclick: move |_| {
+                                    if let Some(d) = draft_signal.write().as_mut() {
+                                        d.confirm_delete = true;
+                                    }
+                                },
+                                "Delete"
+                            }
+                            if draft.kind == DraftKind::Http {
+                                button {
+                                    class: "btn btn-sm btn-ghost",
+                                    title: "Forget the OAuth credentials stored in your keychain for this server",
+                                    onclick: move |_| {
+                                        app.sign_out(id);
+                                        draft_signal.set(None);
+                                    },
+                                    "Sign out"
+                                }
+                            }
                         }
-                        button {
-                            class: "btn btn-sm btn-primary",
-                            onclick: move |_| app.save_draft(),
-                            "Save"
+                        div { class: "ml-auto flex gap-2",
+                            button {
+                                class: "btn btn-sm btn-ghost",
+                                onclick: move |_| draft_signal.set(None),
+                                "Cancel"
+                            }
+                            button {
+                                class: "btn btn-sm btn-primary",
+                                onclick: move |_| app.save_draft(),
+                                "Save"
+                            }
                         }
                     }
                 }

@@ -15,7 +15,6 @@ use crate::state::{AppState, Conn, ServerDraft, Status};
 pub fn Sidebar() -> Element {
     let app = use_context::<AppState>();
     let servers = app.servers;
-    let mut draft = app.draft;
     let mut import_open = app.import_open;
 
     rsx! {
@@ -33,7 +32,7 @@ pub fn Sidebar() -> Element {
                 button {
                     class: "btn btn-ghost btn-xs btn-square text-base-content/50 hover:text-base-content",
                     title: "Add server",
-                    onclick: move |_| draft.set(Some(ServerDraft::default())),
+                    onclick: move |_| app.open_draft(ServerDraft::default()),
                     Icon { icon: LdPlus, width: 13, height: 13 }
                 }
             }
@@ -61,7 +60,6 @@ pub fn Sidebar() -> Element {
 #[component]
 fn EmptyLibrary() -> Element {
     let app = use_context::<AppState>();
-    let mut draft = app.draft;
     let mut import_open = app.import_open;
 
     rsx! {
@@ -79,7 +77,7 @@ fn EmptyLibrary() -> Element {
             div { class: "mt-2 flex gap-1.5",
                 button {
                     class: "btn btn-xs btn-primary",
-                    onclick: move |_| draft.set(Some(ServerDraft::default())),
+                    onclick: move |_| app.open_draft(ServerDraft::default()),
                     "Add server"
                 }
                 button {
@@ -155,7 +153,6 @@ pub fn StatusDot(status: Status) -> Element {
 #[component]
 fn ServerActions(server: ServerRow) -> Element {
     let app = use_context::<AppState>();
-    let mut draft = app.draft;
     let id = server.id;
     let conn = app.conn(id);
 
@@ -197,7 +194,7 @@ fn ServerActions(server: ServerRow) -> Element {
                 title: "Edit",
                 onclick: {
                     let server = server.clone();
-                    move |_| draft.set(Some(ServerDraft::from_row(&server)))
+                    move |_| app.open_draft(ServerDraft::from_row(&server))
                 },
                 Icon { icon: LdPencil, width: 12, height: 12 }
             }

@@ -232,10 +232,7 @@ fn App() -> Element {
 
     let desktop_for_menu = dioxus::desktop::window();
     use_muda_event_handler(move |event| match event.id().0.as_str() {
-        "new-server" => {
-            let mut draft = app.draft;
-            draft.set(Some(ServerDraft::default()));
-        }
+        "new-server" => app.open_draft(ServerDraft::default()),
         "console" => {
             let mut open = app.console_open;
             let now = *open.peek();

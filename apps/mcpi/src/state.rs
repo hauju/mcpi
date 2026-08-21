@@ -177,6 +177,9 @@ pub struct ServerDraft {
     /// `Header: value` per line.
     pub headers: String,
     pub error: Option<String>,
+    /// Delete has been pressed once; the next press is the real one. Lives on
+    /// the draft rather than in the dialog so reopening always starts unarmed.
+    pub confirm_delete: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1242,6 +1245,16 @@ impl AppState {
         });
     }
 
+    /// Open the add/edit dialog. The endpoint verdict is cleared with it: a
+    /// report describes one URL, and left standing it would show up under the
+    /// next dialog as that server's bill of health.
+    pub fn open_draft(&self, draft: ServerDraft) {
+        let mut report = self.endpoint_report;
+        report.set(None);
+        let mut signal = self.draft;
+        signal.set(Some(draft));
+    }
+
     pub fn save_draft(&self) {
         let Some(draft) = self.draft.read().clone() else {
             return;
@@ -1555,10 +1568,19 @@ impl AppState {
             probing.set(true);
             report.set(None);
 
-            let outcome = off_scheduler(async move { probe::probe(&url).await }).await;
+            let probed = url.clone();
+            let outcome = off_scheduler(async move { probe::probe(&probed).await }).await;
             probing.set(false);
             match outcome {
-                Ok(found) => report.set(Some(found)),
+                Ok(found) => {
+                    // The dialog may have moved on while the probe ran — the
+                    // URL edited, or the dialog closed and reopened. A verdict
+                    // about a URL no longer on screen is dropped, not shown.
+                    let current = app.draft.peek().as_ref().map(|d| d.url.trim().to_string());
+                    if current.as_deref() == Some(url.as_str()) {
+                        report.set(Some(found));
+                    }
+                }
                 Err(e) => {
                     let mut notice = app.notice;
                     notice.set(Some(Notice::error(e)));
