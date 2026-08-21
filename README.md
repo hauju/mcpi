@@ -105,6 +105,19 @@ directly.
 
 Auth is `--header` only. The CLI never opens a browser and never touches your keychain.
 
+### In GitHub Actions
+
+[`hauju/mcpi-action`](https://github.com/hauju/mcpi-action) wraps the CLI: it installs a prebuilt
+binary in seconds, fails the job on a breaking change or violated MUST, and posts the classified
+diff as a PR comment.
+
+```yaml
+- uses: hauju/mcpi-action@v1
+  with:
+    source: "stdio:node dist/server.js"
+    baseline: contracts/mcp-snapshot.json
+```
+
 ## Conformance
 
 `mcpi-cli lint` and the app's conformance pane report static spec facts about a server: schema
