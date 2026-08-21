@@ -1,0 +1,89 @@
+name: Release CLI
+
+# The desktop app ships manually (see RELEASING.md); this workflow only builds
+# and publishes `mcpi-cli`. Tags follow the workspace version — the same `v*`
+# tag that pins the engine crates for the site cuts the matching CLI release.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # The tag is the released version; a mismatch would ship a binary whose
+      # `--version` contradicts its release page.
+      - name: Check tag matches workspace version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "mcpi-cli") | .version')
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match workspace version $version" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build -p mcpi-cli --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          tar -C target/${{ matrix.target }}/release -czf \
+            mcpi-cli-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz mcpi-cli
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpi-cli-${{ matrix.target }}
+          path: mcpi-cli-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            *.tar.gz SHA256SUMS

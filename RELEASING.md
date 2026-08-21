@@ -1,5 +1,24 @@
 # Releasing mcpi
 
+The CLI releases itself from CI on a version tag; the desktop app is manual.
+
+## CLI
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds
+`mcpi-cli` for Linux (x86_64, aarch64) and macOS (aarch64, x86_64) and attaches
+tarballs plus a `SHA256SUMS` to a GitHub release for that tag. The workflow
+fails if the tag does not match the workspace version, so bump
+`[workspace.package] version` first:
+
+```sh
+git tag v0.1.2 && git push origin v0.1.2
+```
+
+This is the same tag family that pins the engine crates for the site
+(`mcpi-dx`), on purpose: one tag, one version, and the CLI artifacts for it.
+
+## Desktop app
+
 One-time setup, then the per-release steps. Everything here is macOS-only; the
 other platforms are not shipped yet.
 
