@@ -21,11 +21,13 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod discover;
 mod discovery;
 mod endpoint;
 #[cfg(test)]
 mod tests;
 
+pub use discover::{CandidateSource, Discovered, Discovery, discover};
 pub use discovery::{AuthServer, ProtectedResource};
 
 /// Whether a tool description states that the caller needs credentials.

@@ -3037,7 +3037,7 @@ dependencies = [
 
 [[package]]
 name = "mcpclient"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "keyring",
@@ -3054,7 +3054,7 @@ dependencies = [
 
 [[package]]
 name = "mcpi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "chrono",
@@ -3074,7 +3074,7 @@ dependencies = [
 
 [[package]]
 name = "mcpi-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "mcpclient",
@@ -3089,7 +3089,7 @@ dependencies = [
 
 [[package]]
 name = "mcplint"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "schemadiff",
  "serde_json",
@@ -3097,7 +3097,7 @@ dependencies = [
 
 [[package]]
 name = "mcpstore"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "chrono",
@@ -3166,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "mockserver"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rmcp",
  "serde_json",
@@ -3885,7 +3885,7 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "probe"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest 0.13.4",
  "serde",
@@ -4742,7 +4742,7 @@ dependencies = [
 
 [[package]]
 name = "schemadiff"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",

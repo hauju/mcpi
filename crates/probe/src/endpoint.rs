@@ -351,7 +351,7 @@ async fn list_public_tools(
 ///
 /// Crude on purpose — the goal is "did you mean this one?", and a documentation
 /// page almost always names the endpoint it documents.
-fn mcp_candidates(html: &str, page_url: &str) -> Vec<String> {
+pub(crate) fn mcp_candidates(html: &str, page_url: &str) -> Vec<String> {
     let Ok(base) = url::Url::parse(page_url) else {
         return Vec::new();
     };

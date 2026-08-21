@@ -738,3 +738,153 @@ async fn ordinary_tool_descriptions_are_not_read_as_gated() {
             .any(|f| f.title == "Tools needing credentials are listed without a challenge")
     );
 }
+
+// ── Discovery ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn discovery_finds_the_path_convention() {
+    let base = serve(HashMap::from([("/mcp", initialize_ok())])).await;
+
+    let result = discover(&base, async |_| true).await;
+
+    assert_eq!(result.found.len(), 1, "found: {:?}", result.found);
+    let hit = &result.found[0];
+    assert!(hit.url.ends_with("/mcp"));
+    assert_eq!(hit.source, CandidateSource::Convention);
+    assert_eq!(
+        hit.report.server.as_ref().map(|s| s.name.as_str()),
+        Some("fixture")
+    );
+    // An IP host has no subdomain conventions, so the whole search is the two
+    // path conventions plus the homepage scan.
+    assert!(result.tried.contains(&format!("{base}/mcp")));
+    assert!(result.tried.contains(&format!("{base}/sse")));
+    assert!(result.tried.contains(&format!("{base}/")));
+}
+
+#[tokio::test]
+async fn discovery_follows_the_homepage_referral() {
+    // The endpoint lives at an unconventional path that only the homepage
+    // names — the case a convention sweep alone would call a miss.
+    let base = serve_with(|base| {
+        HashMap::from([
+            (
+                "/",
+                html_response(&format!(
+                    r#"<html><body><a href="{base}/api/v2/mcp">MCP server</a></body></html>"#
+                )),
+            ),
+            ("/api/v2/mcp", initialize_ok()),
+        ])
+    })
+    .await;
+
+    let result = discover(&base, async |_| true).await;
+
+    assert_eq!(result.found.len(), 1, "found: {:?}", result.found);
+    assert!(result.found[0].url.ends_with("/api/v2/mcp"));
+    assert_eq!(result.found[0].source, CandidateSource::Referred);
+}
+
+#[tokio::test]
+async fn discovery_follows_a_documentation_page() {
+    // trustmrr.com again: /mcp is the docs page and the server is at
+    // /api/mcp. The WebPage candidates the first wave extracts are the second
+    // wave's queue.
+    let base = serve_with(|base| {
+        HashMap::from([
+            (
+                "/mcp",
+                html_response(&format!(r#"<p>Connect to <code>{base}/api/mcp</code></p>"#)),
+            ),
+            ("/api/mcp", initialize_ok()),
+        ])
+    })
+    .await;
+
+    let result = discover(&base, async |_| true).await;
+
+    assert_eq!(result.found.len(), 1, "found: {:?}", result.found);
+    assert!(result.found[0].url.ends_with("/api/mcp"));
+    assert_eq!(result.found[0].source, CandidateSource::Referred);
+}
+
+#[tokio::test]
+async fn discovery_collapses_aliases_of_one_server() {
+    // The same deployment answering at two conventions is one server, not
+    // two: identical serverInfo collapses into the first hit.
+    let base = serve(HashMap::from([
+        ("/mcp", initialize_ok()),
+        ("/sse", initialize_ok()),
+    ]))
+    .await;
+
+    let result = discover(&base, async |_| true).await;
+
+    assert_eq!(result.found.len(), 1, "found: {:?}", result.found);
+    assert!(result.found[0].url.ends_with("/mcp"));
+}
+
+#[tokio::test]
+async fn discovery_reports_an_auth_gated_hit() {
+    // A 401 to the handshake is a server, not a miss — it just will not talk
+    // anonymously. It has no identity to collapse on and must survive as-is.
+    let base = serve(HashMap::from([(
+        "/mcp",
+        "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer realm=\"api\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_string(),
+    )]))
+    .await;
+
+    let result = discover(&base, async |_| true).await;
+
+    assert_eq!(result.found.len(), 1, "found: {:?}", result.found);
+    let hit = &result.found[0];
+    assert!(!hit.report.open_to_anonymous);
+    assert!(
+        hit.report
+            .challenge
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Bearer")
+    );
+}
+
+#[tokio::test]
+async fn discovery_contacts_nothing_without_approval() {
+    // The approve hook is the caller's network policy; a refusal must mean no
+    // request of any kind, homepage included.
+    let base = serve(HashMap::from([("/mcp", initialize_ok())])).await;
+
+    let result = discover(&base, async |_| false).await;
+
+    assert!(result.tried.is_empty(), "tried: {:?}", result.tried);
+    assert!(result.found.is_empty());
+}
+
+#[test]
+fn discovery_conventions_cover_the_observed_deployments() {
+    // The shapes seen across real listings: huggingface.co/mcp,
+    // mcp.context7.com/mcp, mcp.deepwiki.com, docs.mcp.cloudflare.com/sse.
+    // Subdomains anchor past a leading www., where nothing is ever deployed.
+    let base = url::Url::parse("https://www.example.com").expect("url");
+    assert_eq!(
+        crate::discover::convention_urls(&base),
+        vec![
+            "https://www.example.com/mcp",
+            "https://mcp.example.com/mcp",
+            "https://mcp.example.com/",
+            "https://mcp.example.com/sse",
+            "https://api.example.com/mcp",
+            "https://www.example.com/sse",
+        ]
+    );
+
+    // An IP host is only itself: inventing mcp.127.0.0.1 would be a DNS name
+    // nobody registered.
+    let base = url::Url::parse("http://127.0.0.1:8080").expect("url");
+    assert_eq!(
+        crate::discover::convention_urls(&base),
+        vec!["http://127.0.0.1:8080/mcp", "http://127.0.0.1:8080/sse"]
+    );
+}
