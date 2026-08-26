@@ -8,7 +8,9 @@ forms generated off their JSON schemas, replay anything from history, and diff a
 against any point in its past with every change classified as **breaking**, **compatible**, or
 **cosmetic**.
 
-Rust, top to bottom. No Node, no Electron.
+Rust, top to bottom. No Node, no Electron. The hosted half is
+[mcpi.app](https://mcpi.app) — a public directory of remote MCP servers running the same probe and
+the same classifier.
 
 ## What this is actually for
 
@@ -141,6 +143,20 @@ level says only whether the spec word behind it is MUST or SHOULD — which desc
 your server. "4 tools return no annotations" is a thing someone fixes. "Quality: C−" is a thing
 someone argues with. That matters because these findings are meant to be readable next to servers
 you do not own.
+
+## The directory
+
+[mcpi.app/servers](https://mcpi.app/servers) lists remote MCP servers, re-probed every six hours,
+with every contract change classified and dated. A listing answers what a README cannot: does it
+connect right now, how does it authenticate, and what changed since last month.
+
+Run a server? [Scan your domain](https://mcpi.app) to see what its listing would look like, then
+publish it — one DNS record or well-known file proves the endpoint is yours, no review queue.
+Listings are free and come with a status badge for your README:
+
+```markdown
+[![MCP status](https://mcpi.app/servers/<slug>/badge.svg)](https://mcpi.app/servers/<slug>)
+```
 
 ## Status
 
