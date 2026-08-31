@@ -3,9 +3,9 @@
 //! One input — `stripe.com`, typed with or without a scheme — and the
 //! question "does this product have an MCP server, and where?" The search
 //! space is small because deployments are conventional: the endpoint lives at
-//! `/mcp` on the main host or on an `mcp.` subdomain, occasionally at `/sse`
-//! for the legacy transport, and the pages that miss name the URL they
-//! document. Two bounded waves cover all of it — the conventions, then
+//! `/mcp` or `/api/mcp` on the main host or on an `mcp.` subdomain,
+//! occasionally at `/sse` for the legacy transport, and the pages that miss
+//! name the URL they document. Two bounded waves cover all of it — the conventions, then
 //! whatever the fetched pages themselves referred to. No crawl, no headless
 //! browser: the long tail past these conventions is exactly the part a person
 //! can paste as a URL directly.
@@ -45,8 +45,8 @@ pub enum CandidateSource {
     /// The URL as the caller entered it, when it pointed at more than a
     /// homepage.
     Entered,
-    /// A deployment convention: `/mcp` on the entered host, the `mcp.` or
-    /// `api.` subdomain, `/sse` for the legacy transport.
+    /// A deployment convention: `/mcp` or `/api/mcp` on the entered host, the
+    /// `mcp.` or `api.` subdomain, `/sse` for the legacy transport.
     Convention,
     /// Named by the site itself — found in the homepage markup, or on a page
     /// a convention candidate turned out to be.
@@ -202,6 +202,13 @@ pub(crate) fn convention_urls(base: &url::Url) -> Vec<String> {
 
     let mut urls = Vec::new();
     if let Ok(joined) = root.join("/mcp") {
+        urls.push(joined.to_string());
+    }
+    // `/api/mcp` on the entered host: what a framework that files routes
+    // under `app/api/` produces, and the single most common shape after
+    // `/mcp` itself. It is a path, not the `api.` subdomain below — a site
+    // with one usually has neither the subdomain nor a root `/mcp`.
+    if let Ok(joined) = root.join("/api/mcp") {
         urls.push(joined.to_string());
     }
     if let Some(url::Host::Domain(domain)) = root.host() {

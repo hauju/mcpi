@@ -788,16 +788,20 @@ async fn discovery_follows_the_homepage_referral() {
 
 #[tokio::test]
 async fn discovery_follows_a_documentation_page() {
-    // trustmrr.com again: /mcp is the docs page and the server is at
-    // /api/mcp. The WebPage candidates the first wave extracts are the second
-    // wave's queue.
+    // A convention candidate that turns out to be prose: the WebPage
+    // candidates the first wave extracts are the second wave's queue. The
+    // deployment this was written from — trustmrr.com, docs at /mcp and the
+    // server at /api/mcp — is a first-wave convention hit now, so the fixture
+    // uses a path no convention reaches.
     let base = serve_with(|base| {
         HashMap::from([
             (
                 "/mcp",
-                html_response(&format!(r#"<p>Connect to <code>{base}/api/mcp</code></p>"#)),
+                html_response(&format!(
+                    r#"<p>Connect to <code>{base}/gateway/mcp</code></p>"#
+                )),
             ),
-            ("/api/mcp", initialize_ok()),
+            ("/gateway/mcp", initialize_ok()),
         ])
     })
     .await;
@@ -805,7 +809,7 @@ async fn discovery_follows_a_documentation_page() {
     let result = discover(&base, async |_| true).await;
 
     assert_eq!(result.found.len(), 1, "found: {:?}", result.found);
-    assert!(result.found[0].url.ends_with("/api/mcp"));
+    assert!(result.found[0].url.ends_with("/gateway/mcp"));
     assert_eq!(result.found[0].source, CandidateSource::Referred);
 }
 
@@ -865,13 +869,15 @@ async fn discovery_contacts_nothing_without_approval() {
 #[test]
 fn discovery_conventions_cover_the_observed_deployments() {
     // The shapes seen across real listings: huggingface.co/mcp,
-    // mcp.context7.com/mcp, mcp.deepwiki.com, docs.mcp.cloudflare.com/sse.
+    // mcp.context7.com/mcp, mcp.deepwiki.com, docs.mcp.cloudflare.com/sse,
+    // nicklaunches.com/api/mcp.
     // Subdomains anchor past a leading www., where nothing is ever deployed.
     let base = url::Url::parse("https://www.example.com").expect("url");
     assert_eq!(
         crate::discover::convention_urls(&base),
         vec![
             "https://www.example.com/mcp",
+            "https://www.example.com/api/mcp",
             "https://mcp.example.com/mcp",
             "https://mcp.example.com/",
             "https://mcp.example.com/sse",
@@ -885,6 +891,10 @@ fn discovery_conventions_cover_the_observed_deployments() {
     let base = url::Url::parse("http://127.0.0.1:8080").expect("url");
     assert_eq!(
         crate::discover::convention_urls(&base),
-        vec!["http://127.0.0.1:8080/mcp", "http://127.0.0.1:8080/sse"]
+        vec![
+            "http://127.0.0.1:8080/mcp",
+            "http://127.0.0.1:8080/api/mcp",
+            "http://127.0.0.1:8080/sse"
+        ]
     );
 }
