@@ -186,6 +186,7 @@ pub async fn probe(url: &str) -> Report {
     let client = match reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .user_agent("mcpi/probe")
+        .redirect(same_host_redirects())
         .build()
     {
         Ok(client) => client,
@@ -336,4 +337,26 @@ fn derive_findings(report: &mut Report) {
             ),
         ));
     }
+}
+
+/// Follow a redirect only when it stays on the host being probed.
+///
+/// `/mcp` to `/mcp/` and `http` to `https` keep working. A hop to another host
+/// does not: a hosted caller vets the *named* host against its private-address
+/// deny-list before probing, and reqwest's default policy would have followed
+/// a `302` from that host straight to a cloud metadata address. Same host,
+/// http(s) only, five hops at most. Mirrors the transport policy in
+/// `mcpclient`, which this crate does not depend on.
+pub(crate) fn same_host_redirects() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let named = attempt.previous().first().and_then(url::Url::host_str);
+        let next = attempt.url();
+        let same_host = named.is_some_and(|h| next.host_str() == Some(h));
+        let http = matches!(next.scheme(), "http" | "https");
+        if attempt.previous().len() >= 5 || !same_host || !http {
+            attempt.stop()
+        } else {
+            attempt.follow()
+        }
+    })
 }

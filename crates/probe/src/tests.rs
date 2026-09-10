@@ -898,3 +898,35 @@ fn discovery_conventions_cover_the_observed_deployments() {
         ]
     );
 }
+
+/// A redirect is followed on the host that was named and refused off it: the
+/// host is what a hosted caller vetted, so a `302` to anywhere else must come
+/// back as the `302` rather than as whatever sits behind it.
+#[tokio::test]
+async fn redirects_stay_on_the_named_host() {
+    let base = serve_with(|base| {
+        let redirect = |to: String| {
+            format!("HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        };
+        let port = base.rsplit(':').next().unwrap();
+        HashMap::from([
+            ("/same", redirect(format!("{base}/landed"))),
+            // Same socket under another name: the policy compares the host
+            // string, so this must stop before any connection is made.
+            ("/other", redirect(format!("http://localhost:{port}/landed"))),
+            ("/landed", json_response("{\"ok\":true}")),
+        ])
+    })
+    .await;
+    let client = reqwest::Client::builder()
+        .redirect(same_host_redirects())
+        .build()
+        .unwrap();
+
+    let same = client.get(format!("{base}/same")).send().await.unwrap();
+    assert_eq!(same.status(), 200);
+    assert_eq!(same.text().await.unwrap(), "{\"ok\":true}");
+
+    let other = client.get(format!("{base}/other")).send().await.unwrap();
+    assert_eq!(other.status(), 302);
+}

@@ -98,6 +98,7 @@ pub async fn discover(input: &str, approve: impl AsyncFn(&str) -> bool) -> Disco
     let Ok(client) = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .user_agent("mcpi/probe")
+        .redirect(crate::same_host_redirects())
         .build()
     else {
         return discovery;

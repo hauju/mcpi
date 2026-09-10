@@ -395,7 +395,7 @@ async fn build_http(
     let mut config = StreamableHttpClientTransportConfig::with_uri(url);
     config.custom_headers = custom;
 
-    let manager = match credential_key {
+    let mut manager = match credential_key {
         Some(key) => oauth::manager_for(url, key).await?,
         // Without a key there is nowhere to persist, so the manager starts and
         // ends empty — sign-in would not survive the session.
@@ -404,10 +404,42 @@ async fn build_http(
             .map_err(|e| Error::Connect(format!("could not prepare authorization: {e}")))?,
     };
 
+    let client = reqwest::Client::builder()
+        .redirect(same_host_redirects())
+        .build()
+        .map_err(|e| Error::Connect(format!("could not build an HTTP client: {e}")))?;
+    // rmcp's manager builds its own client with default redirects; discovery
+    // must obey the same rule as the transport, or it becomes the loophole.
+    manager
+        .with_client(client.clone())
+        .map_err(|e| Error::Connect(format!("could not prepare authorization: {e}")))?;
+
     Ok(StreamableHttpClientTransport::with_client(
-        AuthClient::new(reqwest::Client::default(), manager),
+        AuthClient::new(client, manager),
         config,
     ))
+}
+
+/// Follow a redirect only when it stays on the host the caller named.
+///
+/// A server may move `/mcp` to `/mcp/` or upgrade `http` to `https`, and that
+/// has to keep working. It must not be able to move the connection onto a host
+/// nobody vetted: a hosted caller checks the *named* host against its
+/// private-address deny-list before connecting, and reqwest's default policy
+/// would have followed a `302` from that host straight to a cloud metadata
+/// address. Same host, http(s) only, five hops at most.
+fn same_host_redirects() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let named = attempt.previous().first().and_then(url::Url::host_str);
+        let next = attempt.url();
+        let same_host = named.is_some_and(|h| next.host_str() == Some(h));
+        let http = matches!(next.scheme(), "http" | "https");
+        if attempt.previous().len() >= 5 || !same_host || !http {
+            attempt.stop()
+        } else {
+            attempt.follow()
+        }
+    })
 }
 
 /// Dispatch loop.
