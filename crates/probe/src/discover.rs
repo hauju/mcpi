@@ -88,6 +88,19 @@ pub struct Discovery {
 /// return `false` to skip one; see the module docs for why that policy lives
 /// with the caller.
 pub async fn discover(input: &str, approve: impl AsyncFn(&str) -> bool) -> Discovery {
+    discover_scoped(input, approve, false).await
+}
+
+/// Discovery with connection-time public-address enforcement.
+pub async fn discover_public(input: &str, approve: impl AsyncFn(&str) -> bool) -> Discovery {
+    discover_scoped(input, approve, true).await
+}
+
+async fn discover_scoped(
+    input: &str,
+    approve: impl AsyncFn(&str) -> bool,
+    public_only: bool,
+) -> Discovery {
     let Some(base) = base_url(input) else {
         return Discovery::default();
     };
@@ -95,12 +108,17 @@ pub async fn discover(input: &str, approve: impl AsyncFn(&str) -> bool) -> Disco
         host: base.host_str().unwrap_or_default().to_string(),
         ..Default::default()
     };
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent("mcpi/probe")
-        .redirect(crate::same_host_redirects())
-        .build()
-    else {
+    let client = if public_only {
+        httpguard::Client::public(REQUEST_TIMEOUT)
+    } else {
+        reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .user_agent("mcpi/probe")
+            .redirect(crate::same_host_redirects())
+            .build()
+            .map(httpguard::Client::unrestricted)
+    };
+    let Ok(client) = client else {
         return discovery;
     };
 
@@ -252,7 +270,7 @@ fn push_unique(list: &mut Vec<(String, CandidateSource)>, url: String, source: C
 /// gets the light half of a probe: the initialize POST and what follows from
 /// it, nothing more.
 async fn identify_all(
-    client: &reqwest::Client,
+    client: &httpguard::Client,
     candidates: Vec<(String, CandidateSource)>,
 ) -> Vec<Discovered> {
     let mut set = JoinSet::new();
@@ -288,7 +306,7 @@ async fn identify_all(
 }
 
 /// GET the homepage and pull out the MCP-looking URLs it names.
-async fn homepage_referrals(client: &reqwest::Client, url: &str) -> Vec<String> {
+async fn homepage_referrals(client: &httpguard::Client, url: &str) -> Vec<String> {
     let Ok(mut response) = client.get(url).send().await else {
         return Vec::new();
     };

@@ -2285,6 +2285,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpguard"
+version = "0.1.4"
+dependencies = [
+ "reqwest 0.13.4",
+ "serde",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "hyper"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3040,6 +3050,7 @@ name = "mcpclient"
 version = "0.1.4"
 dependencies = [
  "async-trait",
+ "httpguard",
  "keyring",
  "reqwest 0.13.4",
  "rmcp",
@@ -3887,6 +3898,7 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 name = "probe"
 version = "0.1.4"
 dependencies = [
+ "httpguard",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
