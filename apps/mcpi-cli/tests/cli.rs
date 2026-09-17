@@ -118,6 +118,7 @@ fn a_baseline_pinned_in_the_apps_store_is_a_valid_source() {
                 name: "fixture".into(),
                 transport_kind: mcpstore::TransportKind::Stdio,
                 config: serde_json::json!({}),
+                group_id: None,
             })
             .unwrap();
 

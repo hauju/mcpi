@@ -30,13 +30,16 @@ pub enum Source {
     Stdio { command: String, args: Vec<String> },
     /// A baseline pinned in the desktop app (`@v1.2`).
     Baseline(String),
+    /// A web page whose tools are read out of a browser (`webmcp:https://…`).
+    WebMcp(String),
 }
 
 /// What a source string means. Pure — nothing is read or dialled here.
 ///
-/// `@name` is a baseline, `stdio:` spawns, `http(s)://` dials, and anything
-/// else is a file path — a missing file fails at read time with all four
-/// forms named, so a typo gets the whole menu rather than "not found".
+/// `@name` is a baseline, `stdio:` spawns, `webmcp:` opens a browser,
+/// `http(s)://` dials, and anything else is a file path — a missing file fails
+/// at read time with all five forms named, so a typo gets the whole menu
+/// rather than "not found".
 pub fn parse_source(raw: &str) -> Result<Source, String> {
     if let Some(label) = raw.strip_prefix('@') {
         if label.is_empty() {
@@ -58,6 +61,14 @@ pub fn parse_source(raw: &str) -> Result<Source, String> {
             command,
             args: parts.collect(),
         });
+    }
+    if let Some(rest) = raw.strip_prefix("webmcp:") {
+        if !rest.starts_with("http://") && !rest.starts_with("https://") {
+            return Err(
+                "`webmcp:` needs a page to open (try `webmcp:https://app.example.com`)".into(),
+            );
+        }
+        return Ok(Source::WebMcp(rest.to_string()));
     }
     if raw.starts_with("http://") || raw.starts_with("https://") {
         return Ok(Source::Http(raw.to_string()));
@@ -90,7 +101,8 @@ pub async fn resolve(
             let text = std::fs::read_to_string(path).map_err(|e| {
                 format!(
                     "could not read `{}`: {e}. A source is a snapshot file, an \
-                     http(s):// URL, a `stdio:` command, or an `@baseline`.",
+                     http(s):// URL, a `stdio:` command, a `webmcp:` page, or an \
+                     `@baseline`.",
                     path.display()
                 )
             })?;
@@ -122,6 +134,7 @@ pub async fn resolve(
                 .join(" ");
             Ok((live_snapshot(&transport, command).await?, description))
         }
+        Source::WebMcp(url) => Ok((page_snapshot(url).await?, url.clone())),
         Source::Baseline(label) => {
             let store = Store::open(store_path).map_err(|e| {
                 format!(
@@ -132,6 +145,41 @@ pub async fn resolve(
             let (snapshot, description) = baseline(&store, label, server)?;
             Ok((snapshot, description))
         }
+    }
+}
+
+/// Read a page's WebMCP contract out of a headless browser.
+///
+/// The three non-snapshot outcomes are errors here rather than empty
+/// contracts. An empty `Snapshot` would diff against a baseline as every tool
+/// having been removed — a breaking verdict for a page that never changed —
+/// so a scan that did not establish the contract has to stop the comparison
+/// instead of feeding it a guess.
+async fn page_snapshot(url: &str) -> Result<Snapshot, String> {
+    // A pipeline cannot sign in, so the CLI always scans in a throwaway
+    // profile. What it records is the *anonymous* contract — a real contract,
+    // and the only one CI can reproduce. Comparing it against a signed-in
+    // baseline is the mistake, which is why the two are separate series.
+    let scan = webprobe::Scan::new(url, webprobe::Browser::anonymous());
+
+    match webprobe::scan(&scan).await {
+        Ok(webprobe::Outcome::Settled { snapshot, .. }) => Ok(*snapshot),
+        Ok(webprobe::Outcome::SettledEmpty) => Err(format!(
+            "`{url}` supports WebMCP but registered no tools. If that is the \
+             contract you meant to record, there is nothing to compare; if it \
+             is not, the tools are probably behind a sign-in."
+        )),
+        Ok(webprobe::Outcome::Unsupported { user_agent }) => Err(format!(
+            "`{url}` exposes no WebMCP tools — there is no `document.modelContext` \
+             on the page. Either it does not register any, or this browser does \
+             not implement the API yet ({user_agent})."
+        )),
+        Ok(webprobe::Outcome::Unsettled { seen, .. }) => Err(format!(
+            "`{url}` was still registering tools when time ran out ({seen} so \
+             far), so no contract was established. Nothing was compared rather \
+             than comparing against a half-loaded page."
+        )),
+        Err(e) => Err(format!("could not read `{url}`: {e}")),
     }
 }
 
@@ -299,15 +347,31 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_source("webmcp:https://app.example.com").unwrap(),
+            Source::WebMcp("https://app.example.com".into())
+        );
+        assert_eq!(
             parse_source("snapshots/prod.json").unwrap(),
             Source::File(PathBuf::from("snapshots/prod.json"))
         );
     }
 
     #[test]
+    fn a_webmcp_page_is_not_confused_with_a_plain_url() {
+        // The same host means two different things on either side of the
+        // prefix: one is an MCP endpoint to dial, the other a page to open.
+        assert_eq!(
+            parse_source("https://app.example.com").unwrap(),
+            Source::Http("https://app.example.com".into())
+        );
+        assert!(parse_source("webmcp:app.example.com").is_err());
+    }
+
+    #[test]
     fn empty_prefixes_are_named_errors() {
         assert!(parse_source("@").is_err());
         assert!(parse_source("stdio:").is_err());
+        assert!(parse_source("webmcp:").is_err());
     }
 
     #[test]

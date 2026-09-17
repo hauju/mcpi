@@ -13,6 +13,23 @@ pub fn CallForm(selection: Selection) -> Element {
     let app = use_context::<AppState>();
     let mut raw = app.raw_form;
 
+    // A WebMCP page's tools are registered for the agent driving that browser,
+    // and mcpi holds no session to call them through. Saying so is the honest
+    // answer; a form whose button posted into nothing would not be.
+    let active = app.active();
+    if let Some(url) = active.as_ref().and_then(|c| c.page_url()) {
+        return rsx! {
+            section { class: "border-t border-base-300/70 px-4 py-3 space-y-1",
+                h3 { class: "section-label", "Arguments" }
+                p { class: "text-xs text-base-content/45",
+                    "This tool is registered by "
+                    span { class: "font-mono", "{url}" }
+                    " for the agent driving that browser. mcpi records its contract and classifies what changes; it does not call it."
+                }
+            }
+        };
+    }
+
     let schema = app.schema_for(&selection);
     let properties = schema.as_ref().map(form::properties_of).unwrap_or_default();
     let running = *app.running.read();

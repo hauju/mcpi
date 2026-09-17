@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture v2</title>
+<script src="/_polyfill.js"></script>
+<script>
+  // Diverges from v1 on two axes at once: `add_todo` gains a required
+  // argument (breaking), `search` only rewords its description (cosmetic).
+  // A diff of the two must report Breaking overall.
+  document.modelContext.registerTool({
+    name: 'add_todo',
+    description: "Add an item to the user's todo list.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The item.' },
+        due: { type: 'string', description: 'ISO date.' },
+      },
+      required: ['text', 'due'],
+    },
+    async execute({ text }) { return { content: [{ type: 'text', text }] }; },
+  });
+  document.modelContext.registerTool({
+    name: 'search',
+    description: 'Search across the todo list.',
+    inputSchema: {
+      type: 'object',
+      properties: { q: { type: 'string' } },
+      required: ['q'],
+    },
+    async execute({ q }) { return { content: [{ type: 'text', text: q }] }; },
+  });
+</script>

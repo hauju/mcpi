@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture without WebMCP</title>
+<script>
+  // Shadowed rather than merely absent, so this page reads the same on a
+  // Chrome that does ship the API as on one that does not.
+  Object.defineProperty(document, 'modelContext', {
+    configurable: true,
+    value: undefined,
+  });
+</script>
+<p>An ordinary page.</p>

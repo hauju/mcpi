@@ -34,6 +34,7 @@ Two claims to keep honest:
     ├── schemadiff/  Snapshot → classified diff. Pure logic, no I/O, no rmcp.
     ├── mcplint/     Snapshot → static spec-conformance facts. Pure logic, no I/O, no rmcp.
     ├── probe/       Diagnoses an endpoint from outside: plain HTTP, no session, no credentials
+    ├── webprobe/    Reads a WebMCP page's tools out of a headless Chrome over CDP
     ├── mcpclient/   rmcp 3.x client wrapper → cloneable `Handle`
     ├── mcpstore/    SQLite: servers, snapshots, call history, collections
     └── mockserver/  Hermetic stdio MCP server fixture, two schema variants
@@ -103,7 +104,16 @@ context; none of them take it as a prop.
   Dioxus props require it. Pass `Conn::status()` (a `Copy` enum) instead.
 - **Connecting is one action, in `AppState::connect`.** It dials, snapshots, records, and stores the
   resulting diff in `Conn::Connected`. Recording is what turns "connected" into "connected, and here
-  is what changed" — keep those together rather than making the UI orchestrate them.
+  is what changed" — keep those together rather than making the UI orchestrate them. A row with no
+  transport (`config::to_transport` returns `None`) is a WebMCP page and branches to
+  `AppState::scan_page`, which ends at the same `Conn::Connected`.
+- **`Connected::source` says where the contract came from.** `Live::Session(Handle)` for a dialled
+  server, `Live::Page { url }` for a scanned page — two cases rather than an `Option<Handle>`,
+  because the difference is something the user has to see. `CallForm` renders an explanation instead
+  of a form for a page, and `run` / `run_collection` / `disconnect` take
+  `active().and_then(|c| c.session())` and do nothing without one. Everything else — the browser
+  pane, the diff surfaces, the timeline — reads `snapshot` and `status` and does not care which it
+  was.
 - **The dialog edits text, not structure.** Arguments, environment, and headers are textareas parsed
   on save (`config::lines` / `config::pairs`), because people configure MCP servers by pasting out
   of a JSON config file and a textarea survives a paste where a row editor does not. Arguments are
@@ -207,10 +217,11 @@ ecosystem's winner made (Buf, Optic, oasdiff). `snapshot` prints a contract as J
 it against the spec's static tool rules; `diff` classifies two contracts. Exit `1` on a breaking
 change or a violated MUST, `2` on operational failure, so a pipeline can gate on it directly.
 
-- **A source string is one of four forms**: a snapshot file, `http(s)://` (dialled live),
-  `stdio:command args` (spawned live), or `@label` — a baseline pinned in the desktop app, read from
-  the same `store.db` via `mcpstore::default_path`. Auth is `--header` only; the CLI never opens a
-  browser and never touches the keychain.
+- **A source string is one of five forms**: a snapshot file, `http(s)://` (dialled live),
+  `stdio:command args` (spawned live), `webmcp:https://…` (a page, read in a headless Chrome), or
+  `@label` — a baseline pinned in the desktop app, read from the same `store.db` via
+  `mcpstore::default_path`. Auth is `--header` only; the CLI never signs in and never touches the
+  keychain, so a `webmcp:` scan sees the signed-out tool set.
 - **The binary is `mcpi-cli`, not `mcpi`** — the desktop app already claims that output filename in
   the shared target directory, and two workspace binaries with one name collide. Revisit only at
   standalone release time.
@@ -218,6 +229,149 @@ change or a violated MUST, `2` on operational failure, so a pipeline can gate on
   emit the identical artifact.
 - `tests/cli.rs` spawns the real binary against the real mockserver fixture and asserts on exit
   codes — the two things a pipeline actually consumes.
+
+### Scanning a WebMCP page (`crates/webprobe`)
+
+A WebMCP page registers its tools with the browser rather than answering an HTTP request, so there
+is nothing to probe from outside: the tools only exist inside a tab that has run the page's
+JavaScript. `webprobe` drives a real Chrome over the DevTools Protocol and returns the same
+`schemadiff::Snapshot` the MCP path records, so history and classification work unchanged.
+
+- **An empty tool list is never quietly a snapshot.** Tools register after load, sometimes after a
+  sign-in, sometimes per route. Reading once and leaving sees nothing, and "nothing" diffed against
+  a baseline reads as *every tool removed* — a breaking verdict for a page that never changed. So
+  `scan` returns an `Outcome` with four answers and only `Settled` is a snapshot: `SettledEmpty`,
+  `Unsupported` (no `document.modelContext` at all), and `Unsettled` are each a refusal to compare,
+  and the CLI maps all three to exit `2` rather than to a contract.
+- **Settling is polled, not evented.** The tool set is re-read every 250ms and must come back
+  byte-identical (via `canonical_json`) for two seconds before it counts. Listening for
+  `toolchange` would mean guessing which object fires it; polling needs no such guess and is the
+  wait we have to do anyway.
+- **`server_name` is the origin, never `document.title`.** A title moves with the route and with
+  unread counts ("(3) Inbox — Acme"), so using it would make half the scans of an unchanged page
+  report a rename.
+- **Nothing is bundled and nothing is downloaded, and the user's own Chrome is not an option.**
+  Since Chrome 136 the browser refuses `--remote-debugging-port` on its *default* profile —
+  verified here on 154, where the port never opens. So every debugging endpoint belongs to a
+  purpose-started browser on some other profile, `Browser::Attached` buys nothing the app could
+  want, and the question is only ever *which profile*. `Browser::profile(path)` keeps one between
+  scans (the app); `Browser::anonymous()` uses a throwaway (CI). Do not reintroduce "ask the user to
+  relaunch Chrome with a flag" — it cannot work.
+- **A launched Chrome is closed, never killed.** `Browser.close` over CDP, then wait. Chrome writes
+  its cookie database lazily, so a signal right after a sign-in discards the session that sign-in
+  existed to create, and leaves `exit_type: Crashed` for the user to dismiss next time. `Drop` still
+  kills, but only as the path taken when `close` never ran.
+- **`--enable-automation` is deliberately absent**, and so is anything else that sets
+  `navigator.webdriver`: identity providers refuse to sign in to a browser that admits to being
+  automated, and a profile nobody can sign into defeats the profile's whole purpose.
+- **A fresh profile is seeded with `session.restore_on_startup = 1`.** Most SaaS auth cookies carry
+  no `Expires`, and Chrome drops session cookies at startup unless the profile continues where it
+  left off. Without it the user signs in, the scan works, and the *next* scan is mysteriously signed
+  out. An existing `Preferences` is never overwritten.
+- **`DevToolsActivePort` is not proof of a live browser.** A second Chrome on one profile hands its
+  command line to the first and exits 0, leaving the old file behind — so the port is probed before
+  it is believed.
+- **A browser older than Chrome 149 is refused by name.** `Browser.getVersion` runs before anything
+  is read, so "this Chrome cannot do WebMCP" never arrives disguised as "this page has no tools".
+- **`--enable-features=WebMCP` is not optional.** Chrome 149+ carries the implementation but leaves
+  `document.modelContext` undefined unless the *page* serves an origin-trial token, and almost none
+  do — verified on 154 against three real sites, all of which report the API only once the feature is
+  forced. Without the flag every scan returns `Unsupported` and the product does nothing.
+  `--enable-blink-features=DocumentModelcontext` looks like it should work and does not.
+- **`native.html` is the only fixture that would catch the flag breaking.** Every other fixture
+  polyfills `document.modelContext`, so they all pass just as happily on a Chrome that has never
+  heard of WebMCP. That one registers nothing unless the browser itself provides the API.
+- **Tool descriptors are flattened in the page, not by `returnByValue`.** A real descriptor walks
+  into Chrome's internal object graph and CDP gives up with "Object reference chain is too long".
+  `PROBE_JS` copies enumerable properties with `for...in` — not `Object.keys`, because a
+  browser-provided descriptor keeps its fields on the prototype — and round-trips each through JSON.
+  Copying whatever is enumerable rather than a fixed list is what keeps a field added by a future
+  WebMCP revision visible in a diff.
+- **Four CDP commands, no domains enabled** — create target, attach, navigate, evaluate. That is
+  what keeps `cdp.rs` a request/response loop over a WebSocket instead of a CDP client library.
+- The fixtures under `crates/webprobe/fixtures/` polyfill `document.modelContext`, because real
+  WebMCP needs Chrome 149 with the origin trial and a CI runner has neither. They test *this
+  crate's* acquisition and settle logic, not Chrome's implementation. The scans are `#[ignore]` so
+  a contributor without Chrome can still run `just test`; `just test-chrome` and CI run them.
+### Principals: who a scan is (`config::Principal`)
+
+A page shows a stranger one set of tools and a signed-in user another, and **both are real
+contracts**. The bug is never capturing the anonymous one — it is *comparing* them: diff a
+signed-in baseline against an anonymous scan and every members-only tool reads as removed, which is
+a breaking verdict for a page that did not change.
+
+- **Principal is part of a row's identity, not metadata on a snapshot.** `WebMcpConfig { url,
+  principal }`, so `example.com (anonymous)` and `example.com (signed in)` are two rows with two
+  histories. A cross-principal comparison is not something the app can express, and the classifier
+  never learns that auth exists. Provenance on a snapshot would not be enough: the scanner cannot
+  reliably tell from the page which principal it ran as, so the guarantee has to be structural.
+- **The principal picks the profile, and the profile is the whole of what a scan can see.**
+  `Anonymous` → throwaway directory, signed out by construction, and the only shape CI can
+  reproduce — which is why `mcpi-cli` always records it. `SignedIn` → the profile at
+  `config::browser_profile()`, beside the store.
+- **Rows default to `Anonymous`**, including every row written before principals existed. Defaulting
+  the other way would promote an old row into a signed-in series it never recorded.
+- **Signing in is the same scan, headed.** `AppState::sign_in_page` runs the ordinary scan with
+  `Browser::visible()` and a five-minute budget: the window opens, the user signs in, the tool set
+  settles the moment the real tools register, the contract is captured and the window closes itself.
+  One action, and its completion is the confirmation. There is no "now press rescan".
+- **Re-signing in is a routine state, not an error.** Sessions expire; the failure pane offers
+  **Sign in** whenever `can_sign_in` says the row is a signed-in page.
+
+### The admission gate (`webprobe::Session`, `AppState::admit`)
+
+Principals stop the app comparing *across* series. This stops the dangerous case *within* one: a
+signed-in session that lapses quietly yields a **partial** tool set — fewer tools, page still
+working — and fewer tools is exactly what a real breaking change looks like. Nothing about the tool
+list tells them apart, so the evidence has to come from the browser.
+
+- **`Session` is names and expiries, never values**, plus the URL the tab ended up at. Enough to ask
+  "is the session that was here last time still here", and useless to whoever reads it — which is
+  what lets it sit in `settings` rather than being treated as a credential.
+- **`Session::admits` is blind to the tool list, on purpose.** The classifier says what changed; this
+  says whether the two sides are comparable at all. Keeping them apart is what lets the classifier
+  stay deterministic while the fallible half lives here, where being wrong costs one extra prompt.
+- **It fails closed.** A browser that will not answer leaves an empty fingerprint, and an empty
+  fingerprint is refused rather than waved through. Losing the evidence must never read as "fine".
+- **Only the path is compared**, not the query: apps put filters and tracking params in the URL, and
+  a gate that cried wolf over those would be switched off within a week. `/app` → `/login` is the
+  signal.
+- **Extra cookies are ignored**; only what the baseline had is evidence. Analytics and consent
+  banners add cookies constantly.
+- **The fingerprint is written after the snapshot is recorded**, so a scan that never became a
+  contract never becomes the thing later scans are judged against.
+- **A row with no fingerprint yet is admitted** — there is nothing to compare against, and that scan
+  is what becomes the baseline.
+- **Per-server settings are keyed `server-{id}:{name}` and cleared by `delete_server`.** SQLite
+  reuses rowids, so a key left behind would be read by whichever server next takes that id, as
+  though it described that one.
+
+**Known limit:** a site that keeps its session somewhere other than a cookie leaves nothing to
+check, and only the redirect test protects it. Better than nothing, and the docs say which it is.
+
+### One product, two surfaces (`group.rs`)
+
+A site's MCP endpoint and its WebMCP page are **two rows with two contract histories** — they have
+to be, since one digest stream fed two different contracts would read as a wholesale replacement on
+every scan. But they are one product, and a library listing "SeggWat" twice makes the user carry
+that distinction for nothing. So the split stays in the store and the join happens in the sidebar.
+
+- **`servers.group_id` (migration v4) is display-only.** Nothing in the snapshot path reads it.
+  `ON DELETE SET NULL` rather than CASCADE: deleting the endpoint frees the page, it does not take
+  the page's history with it.
+- **`group::group` collapses rows into entries, preserving library order.** A row whose leader is
+  missing, or is itself grouped, leads its own entry rather than disappearing — a dangling link must
+  never cost the user a server that is visibly in the database.
+- **The badge is rolled up across the group.** A page whose contract broke while you were looking at
+  the endpoint has to be visible without switching, or grouping would *hide* changes. The switch
+  then carries a per-surface marker so you can see which one moved before you go there.
+- **`group::suggest` pre-fills from the origin; it is never a rule.** An endpoint and its page
+  almost always share one (`seggwat.com/mcp` and `seggwat.com`), which is why grouping costs no
+  typing. But `mcp.example.com` beside `example.com` is common enough that a rule would be a
+  permanent blind spot, so the dialog offers a checkbox and the user can always say otherwise. Only
+  group leaders are suggested, so accepting one never builds a chain.
+- **stdio rows never group.** A local process is not a surface of a site, and matching one to a URL
+  would be a guess.
 
 ### Collections (`components/collections.rs`)
 

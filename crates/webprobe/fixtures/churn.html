@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture that never settles</title>
+<script src="/_polyfill.js"></script>
+<script>
+  // Re-registers a differently-named tool forever. There is no moment at which
+  // this page's contract is true, and a scan must say so rather than pick one.
+  let n = 0;
+  setInterval(() => {
+    document.modelContext.unregisterAll();
+    document.modelContext.registerTool({
+      name: 'tool_' + n++,
+      description: 'Churns.',
+      inputSchema: { type: 'object', properties: {} },
+    });
+  }, 300);
+</script>

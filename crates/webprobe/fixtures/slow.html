@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture that registers late</title>
+<script src="/_polyfill.js"></script>
+<script>
+  // The case that makes a naive scan wrong: at `load` there are no tools at
+  // all, and the second one arrives well after that. A scan that reads once
+  // and leaves reports an empty contract for a page with two tools.
+  document.modelContext.registerTool({
+    name: 'first',
+    description: 'Registered while the document parses.',
+    inputSchema: { type: 'object', properties: {} },
+  });
+  setTimeout(() => {
+    document.modelContext.registerTool({
+      name: 'second',
+      description: 'Registered 1200ms after load.',
+      inputSchema: { type: 'object', properties: {} },
+    });
+  }, 1200);
+</script>

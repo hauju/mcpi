@@ -81,6 +81,19 @@ const STEPS: &[&str] = &[
     CREATE UNIQUE INDEX snapshots_label_per_server
         ON snapshots(server_id, label) WHERE label IS NOT NULL;
     "#,
+    // v4 — one product, two surfaces. A site's MCP endpoint and its WebMCP
+    // page are separate rows with separate contract histories, and must stay
+    // that way: one row holding both would hash two different contracts into
+    // one digest stream and read as a wholesale replacement on every scan.
+    // This groups them for display only. NULL means the row is its own group.
+    //
+    // `ON DELETE SET NULL` rather than CASCADE: deleting the endpoint must not
+    // take the page's history with it.
+    r#"
+    ALTER TABLE servers ADD COLUMN group_id INTEGER
+        REFERENCES servers(id) ON DELETE SET NULL;
+    CREATE INDEX servers_by_group ON servers(group_id) WHERE group_id IS NOT NULL;
+    "#,
 ];
 
 pub(crate) fn migrate(conn: &Connection) -> rusqlite::Result<()> {

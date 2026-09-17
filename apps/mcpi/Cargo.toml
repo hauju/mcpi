@@ -28,6 +28,8 @@ arboard = { version = "3", default-features = false }
 mcpclient = { path = "../../crates/mcpclient" }
 mcpstore = { path = "../../crates/mcpstore" }
 schemadiff = { path = "../../crates/schemadiff" }
+webprobe = { path = "../../crates/webprobe" }
+url = "2.5"
 mcplint = { path = "../../crates/mcplint" }
 probe = { path = "../../crates/probe" }
 

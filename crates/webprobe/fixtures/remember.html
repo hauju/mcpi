@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture that remembers the profile</title>
+<script src="/_polyfill.js"></script>
+<script>
+  // Stands in for a sign-in: something the page stores in the profile and
+  // reads back on the next visit. The tool's *name* reports which it was, so
+  // a scan's ordinary output is enough to tell a reused profile from a fresh
+  // one — no extra machinery to test the thing that machinery would test.
+  const seen = localStorage.getItem('mcpi-seen');
+  localStorage.setItem('mcpi-seen', '1');
+  document.modelContext.registerTool({
+    name: seen ? 'returning' : 'first_visit',
+    description: 'Reports whether this profile has been here before.',
+    inputSchema: { type: 'object', properties: {} },
+  });
+</script>

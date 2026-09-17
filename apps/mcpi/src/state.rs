@@ -89,10 +89,25 @@ pub struct HistoryView {
     pub diff: Box<SnapshotDiff>,
 }
 
-/// A live session plus everything learned during the handshake.
+/// Where the contract on screen came from.
+///
+/// Kept as two cases rather than an `Option<Handle>` because the difference is
+/// something the user has to see, not an internal detail: a session's tools can
+/// be called from here and a page's cannot, and the directory has the same rule
+/// the other way round — never blend provenance.
+#[derive(Clone)]
+pub enum Live {
+    /// A live MCP session. Its tools can be called.
+    Session(Handle),
+    /// A page read in a browser. Its tools are registered for the agent driving
+    /// that browser; mcpi records the contract and does not call it.
+    Page { url: String },
+}
+
+/// A server's current contract plus everything learned while obtaining it.
 #[derive(Clone)]
 pub struct Connected {
-    pub handle: Handle,
+    pub source: Live,
     pub snapshot: Snapshot,
     pub status: ContractStatus,
     /// Free-text usage notes the server supplied at initialize.
@@ -100,6 +115,22 @@ pub struct Connected {
 }
 
 impl Connected {
+    /// The live session behind this contract, if it came from one.
+    pub fn session(&self) -> Option<&Handle> {
+        match &self.source {
+            Live::Session(handle) => Some(handle),
+            Live::Page { .. } => None,
+        }
+    }
+
+    /// The page this contract was read from, if it came from one.
+    pub fn page_url(&self) -> Option<&str> {
+        match &self.source {
+            Live::Page { url } => Some(url),
+            Live::Session(_) => None,
+        }
+    }
+
     /// The recorded change for one item, if this connect saw it move.
     pub fn change_for(&self, selection: &Selection) -> Option<ItemChange> {
         let diff = self.status.diff()?;
@@ -176,6 +207,16 @@ pub struct ServerDraft {
     pub url: String,
     /// `Header: value` per line.
     pub headers: String,
+    /// Who to be when reading a WebMCP page.
+    pub principal: config::Principal,
+    /// The server this one is a second surface of.
+    ///
+    /// Suggested from the URL's origin whenever the URL changes, and freely
+    /// overridable until save — so the common case (a site's page beside its
+    /// own endpoint) costs no typing, and the case the origin cannot see
+    /// (`mcp.example.com` beside `example.com`) is one click rather than a
+    /// permanent blind spot.
+    pub group_id: Option<ServerId>,
     pub error: Option<String>,
     /// Delete has been pressed once; the next press is the real one. Lives on
     /// the draft rather than in the dialog so reopening always starts unarmed.
@@ -189,6 +230,8 @@ pub enum DraftKind {
     #[default]
     Http,
     Stdio,
+    /// A web page that registers tools with the browser.
+    WebMcp,
 }
 
 impl From<DraftKind> for TransportKind {
@@ -196,6 +239,7 @@ impl From<DraftKind> for TransportKind {
         match kind {
             DraftKind::Stdio => TransportKind::Stdio,
             DraftKind::Http => TransportKind::Http,
+            DraftKind::WebMcp => TransportKind::WebMcp,
         }
     }
 }
@@ -218,10 +262,19 @@ impl ServerDraft {
                 }
             }
             TransportKind::Http => {
+                draft.group_id = row.group_id;
                 draft.kind = DraftKind::Http;
                 if let Ok(c) = serde_json::from_value::<config::HttpConfig>(row.config.clone()) {
                     draft.url = c.url;
                     draft.headers = config::unpairs(&c.headers, ": ");
+                }
+            }
+            TransportKind::WebMcp => {
+                draft.group_id = row.group_id;
+                draft.kind = DraftKind::WebMcp;
+                if let Ok(c) = serde_json::from_value::<config::WebMcpConfig>(row.config.clone()) {
+                    draft.url = c.url;
+                    draft.principal = c.principal;
                 }
             }
         }
@@ -256,6 +309,19 @@ impl ServerDraft {
                 serde_json::to_value(config::HttpConfig {
                     url: url.to_string(),
                     headers: config::pairs(&self.headers, ':'),
+                })
+            }
+            DraftKind::WebMcp => {
+                let url = self.url.trim();
+                if url.is_empty() {
+                    return Err("A WebMCP page needs a URL.".into());
+                }
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Err("The URL must start with http:// or https://".into());
+                }
+                serde_json::to_value(config::WebMcpConfig {
+                    url: url.to_string(),
+                    principal: self.principal,
                 })
             }
         }
@@ -854,7 +920,9 @@ impl AppState {
         else {
             return;
         };
-        let Some(connected) = self.active() else {
+        // A page's tools belong to the agent driving the browser, so there is
+        // nothing here to call them through.
+        let Some(handle) = self.active().and_then(|c| c.session().cloned()) else {
             return;
         };
         let request = self.form.read().clone();
@@ -869,7 +937,7 @@ impl AppState {
             // without anyone having to re-derive rmcp's internals.
             let result = {
                 let (handle, selection, request) =
-                    (connected.handle.clone(), selection.clone(), request.clone());
+                    (handle.clone(), selection.clone(), request.clone());
                 match off_scheduler(async move { execute(&handle, &selection, &request).await })
                     .await
                 {
@@ -964,7 +1032,9 @@ impl AppState {
             };
 
             let transport = match config::to_transport(row.transport_kind, &row.config, row.id) {
-                Ok(transport) => transport,
+                Ok(Some(transport)) => transport,
+                // A WebMCP page: read in a browser rather than dialled.
+                Ok(None) => return app.scan_page(id, &row.config, false),
                 Err(e) => {
                     return app.set_conn(
                         id,
@@ -1032,7 +1102,7 @@ impl AppState {
             app.set_conn(
                 id,
                 Conn::Connected(Box::new(Connected {
-                    handle,
+                    source: Live::Session(handle),
                     snapshot,
                     status,
                     instructions: info.instructions.clone(),
@@ -1042,6 +1112,179 @@ impl AppState {
             // A change was possibly just recorded; the timeline should show it.
             app.reload_snapshots();
             app.watch_contract(id, session, listener);
+        });
+    }
+
+    /// Read a WebMCP page's contract out of the user's own Chrome.
+    ///
+    /// Attaching to the browser they are already signed into is the whole
+    /// point: a launched, cookie-less Chrome would see the anonymous subset of
+    /// the page's tools and record *that* as the contract, which then reads as
+    /// a pile of removals the next time anyone scans it signed in.
+    ///
+    /// Three of `webprobe`'s four outcomes are failures here. Only a settled,
+    /// non-empty tool set becomes a snapshot — an empty one recorded against a
+    /// page that has tools would diff as every tool having been removed.
+    /// The name under which a page's session fingerprint is kept.
+    fn session_key(id: ServerId) -> String {
+        Store::server_setting_key(id, "session")
+    }
+
+    /// Whether this scan may be recorded as the row's contract.
+    ///
+    /// Only signed-in pages are gated — an anonymous series has no session to
+    /// lose, and a dialled MCP server never reaches here. A row with no
+    /// recorded fingerprint yet is admitted: there is nothing to compare
+    /// against, and this scan is what becomes the baseline.
+    fn admit(&self, id: ServerId, session: &webprobe::Session) -> Result<(), webprobe::Rejection> {
+        if !self.can_sign_in(id) {
+            return Ok(());
+        }
+        let Ok(Some(stored)) = self.store().setting(&Self::session_key(id)) else {
+            return Ok(());
+        };
+        let Ok(baseline) = serde_json::from_str::<webprobe::Session>(&stored) else {
+            return Ok(());
+        };
+        session.admits(&baseline, chrono::Utc::now().timestamp())
+    }
+
+    /// Record what the session looked like on a scan that was admitted.
+    ///
+    /// Written after recording rather than before, so a scan that never became
+    /// a contract never becomes the thing later scans are judged against.
+    fn remember_session(&self, id: ServerId, session: &webprobe::Session) {
+        if !self.can_sign_in(id) {
+            return;
+        }
+        if let Ok(json) = serde_json::to_string(session) {
+            let _ = self.store().set_setting(&Self::session_key(id), &json);
+        }
+    }
+
+    /// Whether signing in is even a thing this server could need.
+    pub fn can_sign_in(&self, id: ServerId) -> bool {
+        self.store()
+            .get_server(id)
+            .is_ok_and(|row| config::is_signed_in_page(row.transport_kind, &row.config))
+    }
+
+    /// Open the page in mcpi's own browser so somebody can sign in.
+    ///
+    /// Deliberately the same scan rather than a separate mode: the window
+    /// stays up, the tool set is polled exactly as always, and the moment it
+    /// settles — which is the moment the sign-in lands and the page registers
+    /// its real tools — the contract is captured and the window closes itself.
+    /// That is the confirmation it worked, with no second button to press.
+    pub fn sign_in_page(&self, id: ServerId) {
+        let Ok(row) = self.store().get_server(id) else {
+            return;
+        };
+        self.scan_page(id, &row.config, true);
+    }
+
+    fn scan_page(&self, id: ServerId, config: &Value, interactive: bool) {
+        let app = *self;
+        let scan = match config::to_scan(config) {
+            Ok(mut scan) => {
+                if interactive {
+                    scan.browser = scan.browser.visible();
+                    // However long a person takes to find their password.
+                    scan.timeout = std::time::Duration::from_secs(300);
+                }
+                scan
+            }
+            Err(e) => {
+                return app.set_conn(
+                    id,
+                    Conn::Failed(format!("Saved settings are unreadable: {e}")),
+                );
+            }
+        };
+
+        spawn(async move {
+            app.set_conn(id, Conn::Connecting);
+
+            let url = scan.url.clone();
+            let outcome = match off_scheduler(async move { webprobe::scan(&scan).await }).await {
+                Ok(Ok(outcome)) => outcome,
+                Ok(Err(e)) => return app.set_conn(id, Conn::Failed(e.to_string())),
+                Err(e) => return app.set_conn(id, Conn::Failed(e)),
+            };
+
+            let (snapshot, session) = match outcome {
+                webprobe::Outcome::Settled { snapshot, session } => (*snapshot, session),
+                webprobe::Outcome::SettledEmpty => {
+                    return app.set_conn(
+                        id,
+                        Conn::Failed(
+                            "The page supports WebMCP but registered no tools. If they are \
+                             behind a sign-in, use Sign in below."
+                                .into(),
+                        ),
+                    );
+                }
+                webprobe::Outcome::Unsupported { .. } => {
+                    return app.set_conn(
+                        id,
+                        Conn::Failed(
+                            "No WebMCP tools on this page — it exposes no `document.modelContext`. \
+                             Either it registers none, or this Chrome does not implement the API yet."
+                                .into(),
+                        ),
+                    );
+                }
+                webprobe::Outcome::Unsettled { seen, .. } => {
+                    return app.set_conn(
+                        id,
+                        Conn::Failed(format!(
+                            "The page was still registering tools when time ran out ({seen} so \
+                             far), so nothing was recorded — a half-loaded page is not a contract."
+                        )),
+                    );
+                }
+            };
+
+            // The admission gate. A signed-in series may only be fed a scan
+            // that was demonstrably still signed in, because a lapsed session
+            // yields a *partial* tool set — fewer tools, page still working —
+            // and fewer tools is indistinguishable from a real breaking change
+            // by looking at the tool list. Refusing to record is the only
+            // answer that cannot be wrong.
+            if let Err(rejection) = app.admit(id, &session) {
+                return app.set_conn(
+                    id,
+                    Conn::Failed(format!("{rejection}. Use Sign in below, then scan again.")),
+                );
+            }
+
+            let status = match app.store().record_snapshot(id, &snapshot) {
+                Ok(SnapshotOutcome::Changed { diff, .. }) => ContractStatus::Changed(diff),
+                Ok(SnapshotOutcome::First { .. }) => ContractStatus::First,
+                Ok(SnapshotOutcome::Unchanged { .. }) => ContractStatus::Unchanged,
+                Err(e) => {
+                    let mut notice = app.notice;
+                    notice.set(Some(Notice::error(format!(
+                        "Scanned the page, but the snapshot was not saved: {e}"
+                    ))));
+                    ContractStatus::First
+                }
+            };
+            app.remember_session(id, &session);
+            let _ = app.store().mark_connected(id);
+
+            app.set_conn(
+                id,
+                Conn::Connected(Box::new(Connected {
+                    source: Live::Page { url },
+                    snapshot,
+                    status,
+                    // A page has no handshake, so nothing supplies instructions.
+                    instructions: None,
+                })),
+            );
+            app.reload_servers();
+            app.reload_snapshots();
         });
     }
 
@@ -1095,7 +1338,7 @@ impl AppState {
                         let current = app
                             .conn(id)
                             .connected()
-                            .is_some_and(|c| c.handle.same_session(&session));
+                            .is_some_and(|c| c.session().is_some_and(|h| h.same_session(&session)));
                         if current {
                             app.set_conn(id, Conn::Failed(format!("Connection lost: {reason}")));
                         }
@@ -1130,8 +1373,11 @@ impl AppState {
                 return;
             };
 
+            let Some(handle) = connected.session().cloned() else {
+                return;
+            };
+
             let snapshot = {
-                let handle = connected.handle.clone();
                 match off_scheduler(async move { handle.snapshot().await }).await {
                     Ok(Ok(snapshot)) => snapshot,
                     // The session is dying; its conn state will say so through
@@ -1164,7 +1410,7 @@ impl AppState {
             app.set_conn(
                 id,
                 Conn::Connected(Box::new(Connected {
-                    handle: connected.handle,
+                    source: connected.source,
                     snapshot,
                     status,
                     instructions: connected.instructions,
@@ -1237,8 +1483,7 @@ impl AppState {
     pub fn disconnect(&self, id: ServerId) {
         let app = *self;
         spawn(async move {
-            if let Some(connected) = app.conn(id).connected() {
-                let handle = connected.handle.clone();
+            if let Some(handle) = app.conn(id).connected().and_then(|c| c.session().cloned()) {
                 let _ = off_scheduler(async move { handle.shutdown().await }).await;
             }
             app.set_conn(id, Conn::Disconnected);
@@ -1272,11 +1517,15 @@ impl AppState {
 
         let name = draft.name.trim();
         let result = match draft.id {
-            Some(id) => self.store().update_server(id, name, &config).map(|_| id),
+            Some(id) => self
+                .store()
+                .update_server(id, name, &config, draft.group_id)
+                .map(|_| id),
             None => self.store().add_server(NewServer {
                 name: name.to_string(),
                 transport_kind: draft.kind.into(),
                 config,
+                group_id: draft.group_id,
             }),
         };
 
@@ -1323,6 +1572,9 @@ impl AppState {
                 name: server.name,
                 transport_kind: server.kind,
                 config: server.config,
+                // Client config files describe endpoints, not products, so
+                // nothing imported arrives knowing it is a second surface.
+                group_id: None,
             }) {
                 Ok(id) => {
                     added += 1;
@@ -1669,7 +1921,7 @@ impl AppState {
         let Some(server_id) = *self.selected_server.read() else {
             return;
         };
-        let Some(connected) = self.active() else {
+        let Some(handle) = self.active().and_then(|c| c.session().cloned()) else {
             let mut notice = self.notice;
             notice.set(Some(Notice::error(
                 "Connect to the server before running a collection.",
@@ -1691,11 +1943,8 @@ impl AppState {
                 };
                 let started = std::time::Instant::now();
                 let outcome = {
-                    let (handle, selection, request) = (
-                        connected.handle.clone(),
-                        selection.clone(),
-                        step.request.clone(),
-                    );
+                    let (handle, selection, request) =
+                        (handle.clone(), selection.clone(), step.request.clone());
                     match off_scheduler(async move { execute(&handle, &selection, &request).await })
                         .await
                     {

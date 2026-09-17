@@ -24,3 +24,4 @@ mcpclient = { path = "../../crates/mcpclient" }
 mcplint = { path = "../../crates/mcplint" }
 mcpstore = { path = "../../crates/mcpstore" }
 schemadiff = { path = "../../crates/schemadiff" }
+webprobe = { path = "../../crates/webprobe" }

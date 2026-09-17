@@ -357,6 +357,17 @@ fn ConnectionFailed(id: i64, error: String) -> Element {
                     onclick: move |_| app.connect(id),
                     "Try again"
                 }
+                // A session that has expired is a routine state, not a fault:
+                // the page is fine, this browser profile just is not signed
+                // into it any more. Offered wherever that is even possible.
+                if app.can_sign_in(id) {
+                    button {
+                        class: "btn btn-sm btn-primary",
+                        title: "Open the page in mcpi's browser so you can sign in",
+                        onclick: move |_| app.sign_in_page(id),
+                        "Sign in"
+                    }
+                }
                 // Only offered when there is something to read. A stdio child
                 // that failed to start usually said why on its own `stderr`,
                 // and that line is the answer far more often than the

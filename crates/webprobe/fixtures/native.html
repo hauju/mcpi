@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture using the real WebMCP API</title>
+<script>
+  // Deliberately no polyfill. This page only works if the browser itself
+  // provides `document.modelContext`, so a scan of it proves that the launch
+  // flags actually turned the feature on — the rest of the fixtures would pass
+  // just as happily against a Chrome that has never heard of WebMCP.
+  const status = document.createElement('p');
+  document.documentElement.appendChild(status);
+  if (typeof document.modelContext === 'undefined') {
+    status.textContent = 'no document.modelContext';
+  } else {
+    document.modelContext.registerTool({
+      name: 'native_tool',
+      description: 'Registered through the browser, not a polyfill.',
+      inputSchema: { type: 'object', properties: {} },
+      async execute() {
+        return { content: [{ type: 'text', text: 'ok' }] };
+      },
+    });
+    status.textContent = 'registered';
+  }
+</script>

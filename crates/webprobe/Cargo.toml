@@ -1,0 +1,32 @@
+[package]
+name = "webprobe"
+description = "Reads a web page's WebMCP tool contract by driving a real Chrome over the DevTools Protocol."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+schemadiff = { path = "../schemadiff" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "net", "io-util"] }
+url = "2.5"
+
+# Chrome's DevTools endpoint is plain `ws://` on loopback, so the default
+# features (connect + handshake) are the whole of what we need — notably no
+# TLS backend is pulled in, unlike the reqwest in `probe`.
+tokio-tungstenite = "0.30"
+futures-util = { version = "0.3", default-features = false, features = [
+    "std",
+    "sink",
+] }
+# Only ever talks to 127.0.0.1 to read `/json/version`.
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tempfile = "3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

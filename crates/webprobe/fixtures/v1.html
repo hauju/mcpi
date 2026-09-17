@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture v1</title>
+<script src="/_polyfill.js"></script>
+<script>
+  document.modelContext.registerTool({
+    name: 'add_todo',
+    description: "Add an item to the user's todo list.",
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'The item.' } },
+      required: ['text'],
+    },
+    async execute({ text }) { return { content: [{ type: 'text', text }] }; },
+  });
+  document.modelContext.registerTool({
+    name: 'search',
+    description: 'Search the todo list.',
+    inputSchema: {
+      type: 'object',
+      properties: { q: { type: 'string' } },
+      required: ['q'],
+    },
+    async execute({ q }) { return { content: [{ type: 'text', text: q }] }; },
+  });
+</script>

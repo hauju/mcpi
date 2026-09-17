@@ -50,7 +50,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: clippy
-        run: cargo clippy -p schemadiff -p mcplint -p mcpclient -p mcpstore -p mockserver -p probe -p mcpi-cli --all-targets -- -D warnings
+        run: cargo clippy -p schemadiff -p mcplint -p mcpclient -p mcpstore -p mockserver -p probe -p webprobe -p mcpi-cli --all-targets -- -D warnings
 
       # mcpclient's and mcpi-cli's integration tests spawn the mockserver
       # binary over stdio, so it has to exist before the suites run.
@@ -58,7 +58,12 @@ jobs:
         run: cargo build -p mockserver
 
       - name: cargo test
-        run: cargo test -p schemadiff -p mcplint -p mcpclient -p mcpstore -p probe -p mcpi-cli
+        run: cargo test -p schemadiff -p mcplint -p mcpclient -p mcpstore -p probe -p webprobe -p mcpi-cli
+
+      # webprobe drives a real browser, so its scans are #[ignore] by default.
+      # GitHub's runner image ships Chrome, so they can run here for real.
+      - name: cargo test (browser scans)
+        run: cargo test -p webprobe --test scan -- --ignored
 
   # The desktop app, on macOS because that is the ship target and because
   # `dioxus/desktop` needs a system WebView — on Linux that would mean

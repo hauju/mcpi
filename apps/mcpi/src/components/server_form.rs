@@ -10,6 +10,8 @@ use dioxus_free_icons::Icon;
 use dioxus_free_icons::icons::ld_icons::LdX;
 
 use crate::components::endpoint_check::EndpointCheck;
+use crate::config::Principal;
+use crate::group;
 use crate::state::{AppState, DraftKind, ServerDraft};
 
 #[component]
@@ -72,7 +74,7 @@ pub fn ServerDialog() -> Element {
 
                     Field { label: "Transport",
                         div { class: "join",
-                            for kind in [DraftKind::Http, DraftKind::Stdio] {
+                            for kind in [DraftKind::Http, DraftKind::Stdio, DraftKind::WebMcp] {
                                 button {
                                     key: "{kind:?}",
                                     class: if draft.kind == kind {
@@ -86,7 +88,11 @@ pub fn ServerDialog() -> Element {
                                             d.error = None;
                                         }
                                     },
-                                    if kind == DraftKind::Stdio { "Local (stdio)" } else { "Remote (HTTP)" }
+                                    match kind {
+                                        DraftKind::Stdio => "Local (stdio)",
+                                        DraftKind::Http => "Remote (HTTP)",
+                                        DraftKind::WebMcp => "Page (WebMCP)",
+                                    }
                                 }
                             }
                         }
@@ -126,6 +132,59 @@ pub fn ServerDialog() -> Element {
                                 oninput: move |e| update(draft_signal, |d, v| d.cwd = v, e.value()),
                             }
                         }
+                    } else if draft.kind == DraftKind::WebMcp {
+                        Field { label: "Page URL",
+                            input {
+                                class: "input input-sm w-full font-mono",
+                                placeholder: "https://app.example.com",
+                                value: "{draft.url}",
+                                oninput: move |e| {
+                                    let url = e.value();
+                                    let suggested = group::suggest(
+                                        &app.servers.read(),
+                                        &url,
+                                        draft_signal.read().as_ref().and_then(|d| d.id),
+                                    );
+                                    if let Some(d) = draft_signal.write().as_mut() {
+                                        d.url = url;
+                                        d.group_id = suggested;
+                                        d.error = None;
+                                    }
+                                },
+                            }
+                        }
+                        Field { label: "Read as", hint: "A page shows a stranger fewer tools",
+                            div { class: "join",
+                                for principal in [Principal::Anonymous, Principal::SignedIn] {
+                                    button {
+                                        key: "{principal:?}",
+                                        class: if draft.principal == principal {
+                                            "btn btn-sm join-item btn-primary"
+                                        } else {
+                                            "btn btn-sm join-item"
+                                        },
+                                        onclick: move |_| {
+                                            if let Some(d) = draft_signal.write().as_mut() {
+                                                d.principal = principal;
+                                                d.error = None;
+                                            }
+                                        },
+                                        "{principal.label()}"
+                                    }
+                                }
+                            }
+                        }
+                        p { class: "text-xs opacity-50",
+                            "mcpi opens its own Chrome — nothing to quit, no flags. "
+                            if draft.principal == Principal::SignedIn {
+                                "Signed-in scans run in a profile mcpi keeps, so you sign in once and it sticks. Use Sign in on the server when a scan comes back empty."
+                            } else {
+                                "Anonymous scans use a fresh profile every time, which is what CI reproduces."
+                            }
+                        }
+                        p { class: "text-xs opacity-50",
+                            "The two are separate contracts with separate history — comparing them would read every members-only tool as removed."
+                        }
                     } else {
                         Field { label: "URL",
                             input {
@@ -133,9 +192,20 @@ pub fn ServerDialog() -> Element {
                                 placeholder: "https://example.com/mcp",
                                 value: "{draft.url}",
                                 // Editing the URL retires the verdict below it,
-                                // which was about the previous URL.
+                                // which was about the previous URL, and
+                                // re-derives which entry this would join.
                                 oninput: move |e| {
-                                    update(draft_signal, |d, v| d.url = v, e.value());
+                                    let url = e.value();
+                                    let suggested = group::suggest(
+                                        &app.servers.read(),
+                                        &url,
+                                        draft_signal.read().as_ref().and_then(|d| d.id),
+                                    );
+                                    if let Some(d) = draft_signal.write().as_mut() {
+                                        d.url = url;
+                                        d.group_id = suggested;
+                                        d.error = None;
+                                    }
                                     let mut report = app.endpoint_report;
                                     report.set(None);
                                 },
@@ -155,6 +225,10 @@ pub fn ServerDialog() -> Element {
                         }
 
                         EndpointCheck {}
+                    }
+
+                    if draft.kind != DraftKind::Stdio {
+                        GroupField { draft: draft.clone() }
                     }
 
                     if let Some(error) = &draft.error {
@@ -227,6 +301,55 @@ pub fn ServerDialog() -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Offer to show this server beside one already in the library.
+///
+/// Only ever appears when there is a real candidate: a site's endpoint and its
+/// page share an origin, which is how the suggestion arrives pre-filled. It
+/// groups the two for display only — each keeps its own contract history, and
+/// that is what makes grouping safe to offer at all.
+#[component]
+fn GroupField(draft: ServerDraft) -> Element {
+    let app = use_context::<AppState>();
+    let mut draft_signal = app.draft;
+
+    let servers = app.servers.read().clone();
+    let target_id = draft
+        .group_id
+        .or_else(|| group::suggest(&servers, &draft.url, draft.id));
+    let Some(target) = target_id.and_then(|id| servers.iter().find(|r| r.id == id).cloned()) else {
+        return rsx! {};
+    };
+
+    let grouped = draft.group_id == Some(target.id);
+    let id = target.id;
+
+    rsx! {
+        Field { label: "Grouping",
+            label { class: "flex items-center gap-2 cursor-pointer",
+                input {
+                    r#type: "checkbox",
+                    class: "checkbox checkbox-xs",
+                    checked: grouped,
+                    onchange: move |_| {
+                        if let Some(d) = draft_signal.write().as_mut() {
+                            d.group_id = if grouped { None } else { Some(id) };
+                            d.error = None;
+                        }
+                    },
+                }
+                span { class: "text-sm",
+                    "Show beside "
+                    span { class: "font-medium", "{target.name}" }
+                    " as one entry"
+                }
+            }
+            p { class: "text-xs opacity-50 mt-1",
+                "Same site, two surfaces. They stay separate contracts with separate history — this only joins them in the list."
             }
         }
     }

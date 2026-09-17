@@ -47,12 +47,14 @@ async fn a_saved_row_connects_snapshots_and_records() {
             name: "Mock".into(),
             transport_kind: TransportKind::Stdio,
             config: stored_config("a"),
+            group_id: None,
         })
         .unwrap();
 
     let row = store.get_server(id).unwrap();
     let transport = config::to_transport(row.transport_kind, &row.config, row.id)
-        .expect("a row written by the dialog must dial");
+        .expect("a row written by the dialog must dial")
+        .expect("a stdio row is dialled");
 
     let (handle, info) = Handle::connect(&transport).await.expect("connect");
     assert!(info.server_info.is_some());
@@ -82,15 +84,18 @@ async fn reconnecting_after_the_server_changed_yields_a_breaking_diff() {
             name: "Mock".into(),
             transport_kind: TransportKind::Stdio,
             config: stored_config("a"),
+            group_id: None,
         })
         .unwrap();
 
     for variant in ["a", "b"] {
         store
-            .update_server(id, "Mock", &stored_config(variant))
+            .update_server(id, "Mock", &stored_config(variant), None)
             .unwrap();
         let row = store.get_server(id).unwrap();
-        let transport = config::to_transport(row.transport_kind, &row.config, row.id).unwrap();
+        let transport = config::to_transport(row.transport_kind, &row.config, row.id)
+            .unwrap()
+            .unwrap();
         let (handle, _) = Handle::connect(&transport).await.expect("connect");
         let snapshot = handle.snapshot().await.expect("snapshot");
         store.record_snapshot(id, &snapshot).unwrap();
@@ -119,11 +124,14 @@ async fn a_row_with_an_unreadable_command_fails_with_an_actionable_message() {
                 "command": "definitely-not-a-real-mcp-server",
                 "env": { "PATH": "/usr/bin:/bin" },
             }),
+            group_id: None,
         })
         .unwrap();
 
     let row = store.get_server(id).unwrap();
-    let transport = config::to_transport(row.transport_kind, &row.config, row.id).unwrap();
+    let transport = config::to_transport(row.transport_kind, &row.config, row.id)
+        .unwrap()
+        .unwrap();
     let error = Handle::connect(&transport)
         .await
         .expect_err("cannot connect");
@@ -144,7 +152,9 @@ use serde_json::json;
 
 /// Connect to the fixture and hand back a live handle.
 async fn connect(variant: &str) -> mcpclient::Handle {
-    let transport = config::to_transport(TransportKind::Stdio, &stored_config(variant), 1).unwrap();
+    let transport = config::to_transport(TransportKind::Stdio, &stored_config(variant), 1)
+        .unwrap()
+        .unwrap();
     let (handle, _) = Handle::connect(&transport).await.expect("connect");
     handle
 }
@@ -183,6 +193,7 @@ async fn calling_a_tool_records_it_and_replaying_reproduces_the_result() {
             name: "Mock".into(),
             transport_kind: TransportKind::Stdio,
             config: stored_config("a"),
+            group_id: None,
         })
         .unwrap();
     let handle = connect("a").await;
@@ -292,15 +303,17 @@ async fn resources_and_prompts_go_through_the_same_dispatch() {
 
 // ── The diff surface (Phase 6) ──────────────────────────────────────────────
 
-use crate::state::{Connected, ContractStatus};
+use crate::state::{Connected, ContractStatus, Live};
 
 /// Connect, snapshot, record, and build the `Connected` the panes read.
 async fn observe(store: &Store, id: mcpstore::ServerId, variant: &str) -> Connected {
     store
-        .update_server(id, "Mock", &stored_config(variant))
+        .update_server(id, "Mock", &stored_config(variant), None)
         .unwrap();
     let row = store.get_server(id).unwrap();
-    let transport = config::to_transport(row.transport_kind, &row.config, row.id).unwrap();
+    let transport = config::to_transport(row.transport_kind, &row.config, row.id)
+        .unwrap()
+        .unwrap();
     let (handle, info) = Handle::connect(&transport).await.expect("connect");
     let snapshot = handle.snapshot().await.expect("snapshot");
 
@@ -311,7 +324,7 @@ async fn observe(store: &Store, id: mcpstore::ServerId, variant: &str) -> Connec
     };
 
     Connected {
-        handle,
+        source: Live::Session(handle),
         snapshot,
         status,
         instructions: info.instructions.clone(),
@@ -326,22 +339,23 @@ async fn the_contract_header_distinguishes_first_from_unchanged_from_changed() {
             name: "Mock".into(),
             transport_kind: TransportKind::Stdio,
             config: stored_config("a"),
+            group_id: None,
         })
         .unwrap();
 
     let first = observe(&store, id, "a").await;
     assert!(matches!(first.status, ContractStatus::First));
-    first.handle.shutdown().await.unwrap();
+    first.session().unwrap().clone().shutdown().await.unwrap();
 
     // Same server, same contract: the banner must say so rather than implying
     // this is a fresh acquaintance.
     let again = observe(&store, id, "a").await;
     assert!(matches!(again.status, ContractStatus::Unchanged));
-    again.handle.shutdown().await.unwrap();
+    again.session().unwrap().clone().shutdown().await.unwrap();
 
     let moved = observe(&store, id, "b").await;
     assert!(matches!(moved.status, ContractStatus::Changed(_)));
-    moved.handle.shutdown().await.unwrap();
+    moved.session().unwrap().clone().shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -352,12 +366,15 @@ async fn a_changed_contract_drives_every_badge_the_ui_shows() {
             name: "Mock".into(),
             transport_kind: TransportKind::Stdio,
             config: stored_config("a"),
+            group_id: None,
         })
         .unwrap();
 
     observe(&store, id, "a")
         .await
-        .handle
+        .session()
+        .unwrap()
+        .clone()
         .shutdown()
         .await
         .unwrap();
@@ -421,7 +438,13 @@ async fn a_changed_contract_drives_every_badge_the_ui_shows() {
         "the reworded description must stay cosmetic"
     );
 
-    connected.handle.shutdown().await.unwrap();
+    connected
+        .session()
+        .unwrap()
+        .clone()
+        .shutdown()
+        .await
+        .unwrap();
 }
 
 // ── Collections (Phase 8) ───────────────────────────────────────────────────
@@ -467,6 +490,7 @@ async fn a_smoke_test_passes_against_one_build_and_fails_against_the_next() {
             name: "Mock".into(),
             transport_kind: TransportKind::Stdio,
             config: stored_config("a"),
+            group_id: None,
         })
         .unwrap();
 
@@ -531,6 +555,7 @@ async fn every_step_of_a_run_lands_in_call_history() {
             name: "Mock".into(),
             transport_kind: TransportKind::Stdio,
             config: stored_config("a"),
+            group_id: None,
         })
         .unwrap();
     let collection = store.create_collection(id, "Smoke").unwrap();
@@ -569,4 +594,94 @@ async fn every_step_of_a_run_lands_in_call_history() {
     let history = store.calls(Some(id), 10).unwrap();
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].request["message"], "two", "newest first");
+}
+
+/// A WebMCP page takes the same route as a server up to the point it diverges:
+/// stored as a row, reopened in the dialog, and turned into a scan rather than
+/// a transport.
+mod webmcp {
+    use super::*;
+    use crate::state::{DraftKind, ServerDraft};
+
+    fn page_row() -> serde_json::Value {
+        serde_json::json!({
+            "url": "https://app.example.com/todos",
+            "principal": "signed_in",
+        })
+    }
+
+    #[test]
+    fn a_page_row_reopens_in_the_dialog_unchanged() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store
+            .add_server(NewServer {
+                name: "Acme app".into(),
+                transport_kind: TransportKind::WebMcp,
+                config: page_row(),
+                group_id: None,
+            })
+            .unwrap();
+
+        let row = store.get_server(id).unwrap();
+        assert_eq!(row.transport_kind, TransportKind::WebMcp);
+
+        let draft = ServerDraft::from_row(&row);
+        assert_eq!(draft.kind, DraftKind::WebMcp);
+        assert_eq!(draft.url, "https://app.example.com/todos");
+        assert_eq!(draft.principal, crate::config::Principal::SignedIn);
+    }
+
+    #[test]
+    fn a_page_is_scanned_and_never_dialled() {
+        let config = page_row();
+
+        // The branch `connect` takes: no transport means read it in a browser.
+        assert!(
+            config::to_transport(TransportKind::WebMcp, &config, 1)
+                .unwrap()
+                .is_none()
+        );
+
+        let scan = config::to_scan(&config).unwrap();
+        assert_eq!(scan.url, "https://app.example.com/todos");
+        assert!(matches!(
+            scan.browser,
+            webprobe::Browser::Launched {
+                profile: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_dialog_refuses_a_page_without_a_usable_url() {
+        let draft = |url: &str| ServerDraft {
+            name: "Acme".into(),
+            kind: DraftKind::WebMcp,
+            url: url.into(),
+            ..Default::default()
+        };
+
+        assert!(draft("").to_config().is_err());
+        // A bare host would be opened as a relative path by the browser.
+        assert!(draft("app.example.com").to_config().is_err());
+        assert!(draft("https://app.example.com").to_config().is_ok());
+    }
+
+    #[test]
+    fn a_new_page_is_anonymous_until_someone_says_otherwise() {
+        // The safe default: an anonymous series can always be promoted by
+        // adding a second row, but a row that claims to be signed-in without
+        // ever having signed in records the wrong contract under the right
+        // name — and that is what diffs as mass removal later.
+        let draft = ServerDraft {
+            name: "Acme".into(),
+            kind: DraftKind::WebMcp,
+            url: "https://app.example.com".into(),
+            ..Default::default()
+        };
+
+        let config = draft.to_config().unwrap();
+        assert_eq!(config["principal"], "anonymous");
+    }
 }

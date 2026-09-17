@@ -209,6 +209,10 @@ fn Row(index: usize, server: Imported, picked: bool, toggle: EventHandler<usize>
     let kind = match server.kind {
         TransportKind::Stdio => "stdio",
         TransportKind::Http => "http",
+        // No client config format describes a WebMCP page, so nothing imported
+        // is ever this. Spelled out anyway rather than swept into a catch-all
+        // that would mislabel the next kind added here.
+        TransportKind::WebMcp => "webmcp",
     };
     // The command or URL, because two entries called `filesystem` are told
     // apart by what they run, not by their name.
@@ -226,7 +230,7 @@ fn Row(index: usize, server: Imported, picked: bool, toggle: EventHandler<usize>
                 .unwrap_or_default();
             format!("{command} {args}").trim_end().to_string()
         }
-        TransportKind::Http => server.config["url"]
+        TransportKind::Http | TransportKind::WebMcp => server.config["url"]
             .as_str()
             .unwrap_or_default()
             .to_string(),

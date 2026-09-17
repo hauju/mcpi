@@ -17,6 +17,7 @@ fn stdio_server(name: &str) -> NewServer {
         name: name.into(),
         transport_kind: TransportKind::Stdio,
         config: json!({ "command": "mockserver", "args": ["--variant", "a"] }),
+        group_id: None,
     }
 }
 
@@ -73,7 +74,7 @@ fn servers_are_listed_case_insensitively_by_name() {
 fn updating_and_deleting_an_unknown_server_is_an_error() {
     let store = store();
     assert!(matches!(
-        store.update_server(404, "x", &json!({})),
+        store.update_server(404, "x", &json!({}), None),
         Err(Error::UnknownServer(404))
     ));
     assert!(matches!(
@@ -492,4 +493,107 @@ fn a_collection_can_be_renamed() {
     let collection = store.create_collection(id, "Old").unwrap();
     store.rename_collection(collection, "New").unwrap();
     assert_eq!(store.collections(id).unwrap()[0].name, "New");
+}
+
+#[test]
+fn a_grouped_row_keeps_its_own_history() {
+    // A site's MCP endpoint and its WebMCP page are one product in the sidebar
+    // and two contracts underneath. Grouping must not touch the second half:
+    // one digest stream fed two different contracts would read as a wholesale
+    // replacement on every scan.
+    let store = Store::open_in_memory().unwrap();
+    let endpoint = store.add_server(stdio_server("SeggWat")).unwrap();
+    let page = store
+        .add_server(NewServer {
+            name: "SeggWat".into(),
+            transport_kind: TransportKind::WebMcp,
+            config: json!({ "url": "https://seggwat.com" }),
+            group_id: Some(endpoint),
+        })
+        .unwrap();
+
+    store
+        .record_snapshot(endpoint, &snapshot_with(false))
+        .unwrap();
+    store.record_snapshot(page, &snapshot_with(true)).unwrap();
+
+    // Neither row sees the other's contract, so neither reports a change.
+    assert!(matches!(
+        store
+            .record_snapshot(endpoint, &snapshot_with(false))
+            .unwrap(),
+        SnapshotOutcome::Unchanged { .. }
+    ));
+    assert!(matches!(
+        store.record_snapshot(page, &snapshot_with(true)).unwrap(),
+        SnapshotOutcome::Unchanged { .. }
+    ));
+
+    let rows = store.list_servers().unwrap();
+    let page_row = rows.iter().find(|r| r.id == page).unwrap();
+    assert_eq!(page_row.group_id, Some(endpoint));
+}
+
+#[test]
+fn deleting_the_endpoint_frees_the_page_rather_than_taking_it() {
+    let store = Store::open_in_memory().unwrap();
+    let endpoint = store.add_server(stdio_server("SeggWat")).unwrap();
+    let page = store
+        .add_server(NewServer {
+            name: "SeggWat".into(),
+            transport_kind: TransportKind::WebMcp,
+            config: json!({ "url": "https://seggwat.com" }),
+            group_id: Some(endpoint),
+        })
+        .unwrap();
+    store.record_snapshot(page, &snapshot_with(true)).unwrap();
+
+    store.delete_server(endpoint).unwrap();
+
+    // The page survives, ungrouped, with its history intact.
+    let page_row = store.get_server(page).unwrap();
+    assert_eq!(page_row.group_id, None);
+    assert_eq!(store.snapshots(page, 10).unwrap().len(), 1);
+}
+
+#[test]
+fn a_row_cannot_be_its_own_group() {
+    let store = Store::open_in_memory().unwrap();
+    let id = store.add_server(stdio_server("Alone")).unwrap();
+
+    store
+        .update_server(id, "Alone", &json!({ "command": "x" }), Some(id))
+        .unwrap();
+
+    assert_eq!(store.get_server(id).unwrap().group_id, None);
+}
+
+#[test]
+fn deleting_a_server_takes_its_settings_with_it() {
+    // Rowids are reused. A setting left behind would be read by whichever
+    // server next takes this id, as though it were about that one.
+    let store = Store::open_in_memory().unwrap();
+    let id = store.add_server(stdio_server("Gone")).unwrap();
+    let key = Store::server_setting_key(id, "session");
+    store.set_setting(&key, "{}").unwrap();
+
+    store.delete_server(id).unwrap();
+
+    assert_eq!(store.setting(&key).unwrap(), None);
+}
+
+#[test]
+fn deleting_one_server_leaves_another_servers_settings_alone() {
+    let store = Store::open_in_memory().unwrap();
+    let doomed = store.add_server(stdio_server("Doomed")).unwrap();
+    let keeper = store.add_server(stdio_server("Keeper")).unwrap();
+    let kept = Store::server_setting_key(keeper, "session");
+    store
+        .set_setting(&Store::server_setting_key(doomed, "session"), "{}")
+        .unwrap();
+    store.set_setting(&kept, "keep me").unwrap();
+
+    store.delete_server(doomed).unwrap();
+
+    assert_eq!(store.setting(&kept).unwrap().as_deref(), Some("keep me"));
 }

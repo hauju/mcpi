@@ -21,6 +21,7 @@ mod components;
 mod config;
 mod demo;
 mod form;
+mod group;
 mod import;
 mod state;
 #[cfg(test)]

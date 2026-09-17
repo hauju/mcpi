@@ -15,7 +15,8 @@ struct Cli {
 }
 
 /// A source is a snapshot file, an `http(s)://` URL (snapshotted live), a
-/// `stdio:command args` server (spawned and snapshotted), or an `@baseline`
+/// `stdio:command args` server (spawned and snapshotted), a
+/// `webmcp:https://…` page (read out of a headless Chrome), or an `@baseline`
 /// pinned in the mcpi app.
 #[derive(Subcommand)]
 enum Command {

@@ -49,11 +49,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// How a server is reached. Mirrors `mcpclient::Transport` without depending on
 /// it — the store has no business knowing how to talk MCP.
+///
+/// `WebMcp` is the odd one out: it names a page rather than an endpoint, and
+/// there is no session behind it. It lives here anyway because a page earns
+/// snapshot history on exactly the same terms as a server, and history is what
+/// the store is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TransportKind {
     Stdio,
     Http,
+    WebMcp,
 }
 
 impl TransportKind {
@@ -61,12 +67,14 @@ impl TransportKind {
         match self {
             Self::Stdio => "stdio",
             Self::Http => "http",
+            Self::WebMcp => "webmcp",
         }
     }
 
     fn parse(s: &str) -> Self {
         match s {
             "http" => Self::Http,
+            "webmcp" => Self::WebMcp,
             _ => Self::Stdio,
         }
     }
@@ -81,6 +89,10 @@ pub struct ServerRow {
     pub config: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub last_connected_at: Option<DateTime<Utc>>,
+    /// Another row this one is a second surface of — a site's MCP endpoint and
+    /// its WebMCP page. Display only: the two keep separate contract histories,
+    /// and nothing in the snapshot path reads this. `None` stands alone.
+    pub group_id: Option<ServerId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +100,8 @@ pub struct NewServer {
     pub name: String,
     pub transport_kind: TransportKind,
     pub config: serde_json::Value,
+    /// See [`ServerRow::group_id`].
+    pub group_id: Option<ServerId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -239,13 +253,14 @@ impl Store {
     pub fn add_server(&self, new: NewServer) -> Result<ServerId> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO servers (name, transport_kind, config_json, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO servers (name, transport_kind, config_json, created_at, group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 new.name,
                 new.transport_kind.as_str(),
                 new.config.to_string(),
                 now(),
+                new.group_id,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -254,7 +269,7 @@ impl Store {
     pub fn list_servers(&self) -> Result<Vec<ServerRow>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, name, transport_kind, config_json, created_at, last_connected_at
+            "SELECT id, name, transport_kind, config_json, created_at, last_connected_at, group_id
              FROM servers ORDER BY name COLLATE NOCASE",
         )?;
         let rows = stmt
@@ -266,12 +281,13 @@ impl Store {
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         rows.into_iter()
-            .map(|(id, name, kind, config, created, connected)| {
+            .map(|(id, name, kind, config, created, connected, group_id)| {
                 Ok(ServerRow {
                     id,
                     name,
@@ -279,6 +295,7 @@ impl Store {
                     config: serde_json::from_str(&config)?,
                     created_at: parse_time(&created),
                     last_connected_at: connected.as_deref().map(parse_time),
+                    group_id,
                 })
             })
             .collect()
@@ -296,10 +313,14 @@ impl Store {
         id: ServerId,
         name: &str,
         config: &serde_json::Value,
+        group_id: Option<ServerId>,
     ) -> Result<()> {
+        // A row cannot be its own group: the sidebar would render it twice and
+        // the toggle would point at itself.
+        let group_id = group_id.filter(|g| *g != id);
         let changed = self.conn().execute(
-            "UPDATE servers SET name = ?1, config_json = ?2 WHERE id = ?3",
-            params![name, config.to_string(), id],
+            "UPDATE servers SET name = ?1, config_json = ?2, group_id = ?3 WHERE id = ?4",
+            params![name, config.to_string(), group_id, id],
         )?;
         if changed == 0 {
             return Err(Error::UnknownServer(id));
@@ -315,6 +336,14 @@ impl Store {
         if changed == 0 {
             return Err(Error::UnknownServer(id));
         }
+        // Settings are keyed, not foreign-keyed, so nothing cascades them.
+        // They must go all the same: SQLite reuses rowids, so a key left here
+        // would be inherited by whichever server next takes this id — carrying
+        // observations about a completely different site.
+        let _ = self.conn().execute(
+            "DELETE FROM settings WHERE key LIKE ?1",
+            params![format!("server-{id}:%")],
+        );
         // Best-effort: a leftover keychain entry is harmless but untidy.
         let _ = secrets::delete(id);
         Ok(())
@@ -524,6 +553,15 @@ impl Store {
     }
 
     // ── Settings ────────────────────────────────────────────────────────────
+
+    /// The key under which a per-server setting is stored.
+    ///
+    /// The prefix is load-bearing: [`Store::delete_server`] clears everything
+    /// matching it, which is what stops a recycled rowid inheriting the
+    /// previous occupant's data.
+    pub fn server_setting_key(id: ServerId, name: &str) -> String {
+        format!("server-{id}:{name}")
+    }
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self

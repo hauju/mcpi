@@ -13,14 +13,20 @@ fmt:
 # features across members, and `dioxus/desktop` should not leak into the
 # headless crates' graph.
 clippy:
-    cargo clippy -p schemadiff -p mcplint -p mcpclient -p mcpstore -p mockserver -p probe -p mcpi-cli --all-targets -- -D warnings
+    cargo clippy -p schemadiff -p mcplint -p mcpclient -p mcpstore -p mockserver -p probe -p webprobe -p mcpi-cli --all-targets -- -D warnings
     cargo clippy -p mcpi --all-targets -- -D warnings
 
 # mcpclient's and mcpi-cli's suites spawn the mockserver binary over stdio, so
 # it has to exist first.
 test:
     cargo build -p mockserver
-    cargo test -p schemadiff -p mcplint -p mcpclient -p mcpstore -p probe -p mcpi -p mcpi-cli
+    cargo test -p schemadiff -p mcplint -p mcpclient -p mcpstore -p probe -p webprobe -p mcpi -p mcpi-cli
+
+# webprobe's scans need a real Chrome, so they are #[ignore] by default and
+# run here. Not part of `check`: a contributor without Chrome should still be
+# able to run the suite.
+test-chrome:
+    cargo test -p webprobe --test scan -- --ignored
 
 check: fmt clippy test
 
