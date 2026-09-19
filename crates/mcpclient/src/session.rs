@@ -227,6 +227,34 @@ pub(crate) async fn spawn(
     Ok(info)
 }
 
+pub(crate) async fn spawn_public(
+    url: &str,
+    rx: mpsc::Receiver<Cmd>,
+    events: broadcast::Sender<Event>,
+) -> Result<Arc<ServerPeerInfo>> {
+    httpguard::validate_url(url).map_err(|e| Error::Connect(e.to_string()))?;
+    let client = httpguard::client_builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| Error::Connect(e.to_string()))?;
+    let transport = StreamableHttpClientTransport::with_client(
+        client,
+        StreamableHttpClientTransportConfig::with_uri(url),
+    );
+    let handler = Forwarder {
+        events: events.clone(),
+    };
+    let service = handler
+        .serve(Recording::new(transport, events.clone()))
+        .await
+        .map_err(|e| classify(e, url))?;
+    let info = service
+        .peer_info()
+        .ok_or_else(|| Error::Connect("the server completed no handshake".into()))?;
+    tokio::spawn(run(service, rx, events));
+    Ok(info)
+}
+
 /// Turn an initialize failure into something the UI can offer a button for.
 ///
 /// The interesting case is a 401: `AuthClient` sends the first request

@@ -19,7 +19,7 @@ fn initialize_body() -> Value {
     })
 }
 
-pub(crate) async fn identify(client: &reqwest::Client, url: &str, report: &mut Report) {
+pub(crate) async fn identify(client: &httpguard::Client, url: &str, report: &mut Report) {
     let started = std::time::Instant::now();
     let response = client
         .post(url)
@@ -240,7 +240,7 @@ pub(crate) async fn identify(client: &reqwest::Client, url: &str, report: &mut R
 /// endpoint without CORS headers is invisible to anything running in a web
 /// page, and the failure there is silent — the browser blocks it, the server
 /// never sees it, and no error names the cause.
-pub(crate) async fn check_cors(client: &reqwest::Client, url: &str, report: &mut Report) {
+pub(crate) async fn check_cors(client: &httpguard::Client, url: &str, report: &mut Report) {
     let response = client
         .request(reqwest::Method::OPTIONS, url)
         .header("origin", "https://example.com")
@@ -272,7 +272,7 @@ pub(crate) async fn check_cors(client: &reqwest::Client, url: &str, report: &mut
 /// Whether a GET on the URL opens an event stream. Only the headers are read
 /// — an SSE stream never ends, and the content type alone identifies the
 /// transport; dropping the response aborts the connection.
-async fn sniffs_as_legacy_sse(client: &reqwest::Client, url: &str) -> bool {
+async fn sniffs_as_legacy_sse(client: &httpguard::Client, url: &str) -> bool {
     let Ok(response) = client
         .get(url)
         .header("accept", "text/event-stream")
@@ -308,7 +308,7 @@ fn json_payload(body: &str) -> Option<Value> {
 /// kept because the only statement a server makes about needing credentials is
 /// often in there, and an empty one simply never matches.
 async fn list_public_tools(
-    client: &reqwest::Client,
+    client: &httpguard::Client,
     url: &str,
     session: Option<&str>,
 ) -> Vec<(String, String)> {

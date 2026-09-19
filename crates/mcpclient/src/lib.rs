@@ -153,6 +153,15 @@ impl Handle {
         (result, backlog)
     }
 
+    /// Anonymous hosted connection. Rejects private literal addresses, resolves
+    /// DNS through a public-only connector, and never invokes OAuth discovery.
+    pub async fn connect_public(url: &str) -> Result<(Self, Arc<ServerPeerInfo>)> {
+        let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (tx, rx) = mpsc::channel(32);
+        let info = session::spawn_public(url, rx, events.clone()).await?;
+        Ok((Self { tx, events }, info))
+    }
+
     /// Subscribe to notifications from the server.
     ///
     /// Only messages sent after subscribing are delivered;

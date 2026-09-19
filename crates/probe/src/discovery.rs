@@ -41,7 +41,7 @@ pub struct AuthServer {
     pub scopes: Vec<String>,
 }
 
-pub(crate) async fn resolve(client: &reqwest::Client, url: &str, report: &mut Report) {
+pub(crate) async fn resolve(client: &httpguard::Client, url: &str, report: &mut Report) {
     let Ok(endpoint) = url::Url::parse(url) else {
         return;
     };
@@ -119,7 +119,7 @@ pub(crate) fn resource_metadata_from_challenge(challenge: &str) -> Option<String
 }
 
 async fn fetch_protected_resource(
-    client: &reqwest::Client,
+    client: &httpguard::Client,
     url: &str,
 ) -> Option<ProtectedResource> {
     let json = fetch_json(client, url).await?;
@@ -132,7 +132,7 @@ async fn fetch_protected_resource(
     })
 }
 
-async fn fetch_authorization_server(client: &reqwest::Client, url: &str) -> Option<AuthServer> {
+async fn fetch_authorization_server(client: &httpguard::Client, url: &str) -> Option<AuthServer> {
     let json = fetch_json(client, url).await?;
     // Without an issuer this is not RFC 8414 metadata, whatever else it is.
     let issuer = string_at(&json, "issuer")?;
@@ -152,7 +152,7 @@ async fn fetch_authorization_server(client: &reqwest::Client, url: &str) -> Opti
     })
 }
 
-async fn fetch_json(client: &reqwest::Client, url: &str) -> Option<Value> {
+async fn fetch_json(client: &httpguard::Client, url: &str) -> Option<Value> {
     let response = client.get(url).send().await.ok()?;
     if !response.status().is_success() {
         return None;

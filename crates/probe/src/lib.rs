@@ -21,13 +21,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use httpguard;
+
 mod discover;
 mod discovery;
 mod endpoint;
 #[cfg(test)]
 mod tests;
 
-pub use discover::{CandidateSource, Discovered, Discovery, discover};
+pub use discover::{CandidateSource, Discovered, Discovery, discover, discover_public};
 pub use discovery::{AuthServer, ProtectedResource};
 
 /// Whether a tool description states that the caller needs credentials.
@@ -178,17 +180,30 @@ impl Report {
 /// Never fails: an unreachable host is a finding, not an error. The whole point
 /// is to return a verdict on input that does not work.
 pub async fn probe(url: &str) -> Report {
+    probe_scoped(url, false).await
+}
+
+/// Hosted probe: every request, including OAuth metadata, stays on the public network.
+pub async fn probe_public(url: &str) -> Report {
+    probe_scoped(url, true).await
+}
+
+async fn probe_scoped(url: &str, public_only: bool) -> Report {
     let mut report = Report {
         url: url.to_string(),
         ..Default::default()
     };
 
-    let client = match reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent("mcpi/probe")
-        .redirect(same_host_redirects())
-        .build()
-    {
+    let client = match if public_only {
+        httpguard::Client::public(REQUEST_TIMEOUT)
+    } else {
+        reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .user_agent("mcpi/probe")
+            .redirect(same_host_redirects())
+            .build()
+            .map(httpguard::Client::unrestricted)
+    } {
         Ok(client) => client,
         Err(e) => {
             report.kind = Some(EndpointKind::Unreachable {
