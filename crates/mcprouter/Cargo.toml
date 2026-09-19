@@ -1,0 +1,33 @@
+[package]
+name = "mcprouter"
+description = "MCP gateway core: routes find_tools/call_tool across upstream servers with a TypeSafe Jev decision."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "signal", "net"] }
+tokio-util = "0.7"
+rmcp = { workspace = true, features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+schemars = "1"
+axum = "0.8"
+# The routing decision is one HTTPS POST per find_tools; rustls so no system
+# OpenSSL is needed, matching mcpclient.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+schemadiff = { path = "../schemadiff" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

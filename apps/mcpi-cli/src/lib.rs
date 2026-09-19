@@ -19,6 +19,8 @@ use mcpclient::{Handle, Transport};
 use mcpstore::Store;
 use schemadiff::{Snapshot, SnapshotDiff};
 
+pub mod serve;
+
 /// One side of a comparison, as typed on the command line.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Source {

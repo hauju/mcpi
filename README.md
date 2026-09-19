@@ -213,3 +213,26 @@ through; a false "breaking" trains people to ignore the tool. Changes to the rul
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+## The gateway: `mcpi-cli serve`
+
+The saved server library, served as **one** MCP server with two tools. A client (Claude Code,
+Cursor, your own agent) connects to the gateway instead of to every server, and sees
+`find_tools` and `call_tool` instead of every upstream's full tool definitions:
+
+```console
+$ mcpi-cli serve                       # stdio, for clients that spawn the gateway
+$ mcpi-cli serve --transport http      # streamable HTTP at /mcp, plus /health
+$ mcpi-cli stats                       # which tools are used, which the router missed
+```
+
+`find_tools(request)` ranks the whole catalog with one TypeSafe Jev `choice` question
+(`TYPESAFE_API_KEY`, or `.env`) and returns the top definitions; `call_tool(name, arguments)`
+proxies verbatim. Rows are dialled exactly as the app dials them — same config, same keychain
+credentials, so a server you signed into in the app works in the gateway — and snapshotted on
+connect, so the contract history keeps flowing. When an upstream's contract moved since the app
+last saw it, `find_tools` says so next to the affected tools.
+
+`--expose-direct <tool>` lists a tool alongside the two meta tools for the hot set you call every
+turn; `mcpi-cli stats` reads the gateway's JSONL log (`router.jsonl` beside the store) and
+recommends which tools have earned that.

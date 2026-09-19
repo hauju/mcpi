@@ -21,7 +21,15 @@ tokio = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 mcpclient = { path = "../../crates/mcpclient" }
+mcprouter = { path = "../../crates/mcprouter" }
+rmcp = { workspace = true }
+chrono = { workspace = true }
 mcplint = { path = "../../crates/mcplint" }
 mcpstore = { path = "../../crates/mcpstore" }
 schemadiff = { path = "../../crates/schemadiff" }
 webprobe = { path = "../../crates/webprobe" }
+
+[dev-dependencies]
+# The serve test stands in for TypeSafe with a local HTTP endpoint.
+axum = "0.8"
+tokio = { workspace = true, features = ["full"] }
