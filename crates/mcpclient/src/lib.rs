@@ -162,6 +162,29 @@ impl Handle {
         Ok((Self { tx, events }, info))
     }
 
+    /// Hosted connection carrying static headers — a bearer token, an API key.
+    ///
+    /// The same public-address policy as [`Handle::connect_public`]: private,
+    /// loopback and link-local literals are refused, and DNS resolves through a
+    /// connector that hands the vetted addresses straight to the socket, so a
+    /// name cannot resolve to something else between the check and the
+    /// connection. No proxy, and redirects stay on the named host.
+    ///
+    /// It differs from [`Handle::connect_public`] in one way that matters to a
+    /// gateway: a `401` comes back as [`Error::AuthRequired`] with the server's
+    /// `WWW-Authenticate` challenge, which is what an OAuth sign-in discovers
+    /// from. Nothing is persisted and no sign-in is attempted here — a server
+    /// has no keychain.
+    pub async fn connect_public_with_headers(
+        url: &str,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<(Self, Arc<ServerPeerInfo>)> {
+        let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (tx, rx) = mpsc::channel(32);
+        let info = session::spawn_public_with_headers(url, headers, rx, events.clone()).await?;
+        Ok((Self { tx, events }, info))
+    }
+
     /// Subscribe to notifications from the server.
     ///
     /// Only messages sent after subscribing are delivered;

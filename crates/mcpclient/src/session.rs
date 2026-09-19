@@ -211,7 +211,8 @@ pub(crate) async fn spawn(
             headers,
             credential_key,
         } => {
-            let transport = build_http(url, headers, credential_key.as_deref()).await?;
+            let transport =
+                build_http(url, headers, credential_key.as_deref(), local_client()?).await?;
             handler
                 .serve(Recording::new(transport, events.clone()))
                 .await
@@ -233,14 +234,40 @@ pub(crate) async fn spawn_public(
     events: broadcast::Sender<Event>,
 ) -> Result<Arc<ServerPeerInfo>> {
     httpguard::validate_url(url).map_err(|e| Error::Connect(e.to_string()))?;
-    let client = httpguard::client_builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| Error::Connect(e.to_string()))?;
     let transport = StreamableHttpClientTransport::with_client(
-        client,
+        public_client()?,
         StreamableHttpClientTransportConfig::with_uri(url),
     );
+    let handler = Forwarder {
+        events: events.clone(),
+    };
+    let service = handler
+        .serve(Recording::new(transport, events.clone()))
+        .await
+        .map_err(|e| classify(e, url))?;
+    let info = service
+        .peer_info()
+        .ok_or_else(|| Error::Connect("the server completed no handshake".into()))?;
+    tokio::spawn(run(service, rx, events));
+    Ok(info)
+}
+
+/// Hosted connection to a public endpoint, carrying static headers.
+///
+/// Unlike [`spawn_public`] this goes through the same `AuthClient` path as a
+/// local connection, because the caller is a gateway that has to *learn* a
+/// server wants OAuth: only that path turns a 401 into
+/// [`Error::AuthRequired`] with the `WWW-Authenticate` challenge attached.
+/// Nothing is persisted — there is no keychain on a server — so the manager
+/// starts and ends empty and no sign-in happens here.
+pub(crate) async fn spawn_public_with_headers(
+    url: &str,
+    headers: &std::collections::BTreeMap<String, String>,
+    rx: mpsc::Receiver<Cmd>,
+    events: broadcast::Sender<Event>,
+) -> Result<Arc<ServerPeerInfo>> {
+    httpguard::validate_url(url).map_err(|e| Error::Connect(e.to_string()))?;
+    let transport = build_http(url, headers, None, public_client()?).await?;
     let handler = Forwarder {
         events: events.clone(),
     };
@@ -408,6 +435,7 @@ async fn build_http(
     url: &str,
     headers: &std::collections::BTreeMap<String, String>,
     credential_key: Option<&str>,
+    client: reqwest::Client,
 ) -> Result<StreamableHttpClientTransport<AuthClient<reqwest::Client>>> {
     let mut custom = HashMap::new();
     for (key, value) in headers {
@@ -432,10 +460,6 @@ async fn build_http(
             .map_err(|e| Error::Connect(format!("could not prepare authorization: {e}")))?,
     };
 
-    let client = reqwest::Client::builder()
-        .redirect(same_host_redirects())
-        .build()
-        .map_err(|e| Error::Connect(format!("could not build an HTTP client: {e}")))?;
     // rmcp's manager builds its own client with default redirects; discovery
     // must obey the same rule as the transport, or it becomes the loophole.
     manager
@@ -446,6 +470,25 @@ async fn build_http(
         AuthClient::new(client, manager),
         config,
     ))
+}
+
+/// The connector a desktop or CLI caller gets: any address, same-host redirects.
+fn local_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .redirect(same_host_redirects())
+        .build()
+        .map_err(|e| Error::Connect(format!("could not build an HTTP client: {e}")))
+}
+
+/// The connector a hosted caller gets: public addresses only, resolved through
+/// `httpguard`'s own DNS so the address cannot change between the check and the
+/// connection, no proxy, and redirects that stay on the named host and are
+/// re-validated at every hop.
+fn public_client() -> Result<reqwest::Client> {
+    httpguard::client_builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| Error::Connect(format!("could not build an HTTP client: {e}")))
 }
 
 /// Follow a redirect only when it stays on the host the caller named.

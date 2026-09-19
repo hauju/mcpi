@@ -126,3 +126,122 @@ async fn a_deprecated_sse_endpoint_names_its_own_problem() {
         "the message has to say why: {error}"
     );
 }
+
+/// Capture the first request line-block each connection sends, so a test can
+/// assert what actually went on the wire.
+async fn capture_requests(
+    response: &'static str,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = seen.clone();
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let sink = sink.clone();
+            tokio::spawn(async move {
+                let mut buffer = [0u8; 8192];
+                if let Ok(n) = stream.read(&mut buffer).await {
+                    sink.lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&buffer[..n]).to_string());
+                }
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), seen)
+}
+
+const UNAUTHORIZED_PLAIN: &str = concat!(
+    "HTTP/1.1 401 Unauthorized\r\n",
+    "WWW-Authenticate: Bearer realm=\"mcp\"\r\n",
+    "Content-Length: 0\r\n",
+    "Connection: close\r\n\r\n"
+);
+
+/// The header plumbing is shared by every HTTP dial, public or not. It is
+/// exercised through the unrestricted transport because the public one refuses
+/// loopback by design — and refusing loopback is the next test.
+#[tokio::test]
+async fn static_headers_reach_the_server() {
+    let (base, seen) = capture_requests(UNAUTHORIZED_PLAIN).await;
+    let mut headers = BTreeMap::new();
+    headers.insert(
+        "Authorization".to_string(),
+        "Bearer upstream-secret".to_string(),
+    );
+    headers.insert("X-Tenant".to_string(), "acme".to_string());
+
+    let _ = Handle::connect(&Transport::Http {
+        url: format!("{base}/mcp"),
+        headers,
+        credential_key: None,
+    })
+    .await;
+
+    let requests = seen.lock().unwrap();
+    let sent = requests
+        .first()
+        .expect("the client must have sent a request");
+    assert!(
+        sent.contains("authorization: Bearer upstream-secret"),
+        "the bearer must ride the request: {sent}"
+    );
+    assert!(sent.contains("x-tenant: acme"), "{sent}");
+}
+
+#[tokio::test]
+async fn a_header_that_is_not_a_header_is_refused_before_any_connection() {
+    let mut headers = BTreeMap::new();
+    headers.insert("not a header name".to_string(), "x".to_string());
+    let error = Handle::connect_public_with_headers("https://example.com/mcp", &headers)
+        .await
+        .expect_err("an unusable header name cannot be sent");
+    assert!(
+        error.to_string().contains("not a valid header name"),
+        "{error}"
+    );
+}
+
+/// The whole reason this dial exists: a hosted caller must not be talked into
+/// connecting to its own network, and the check happens before any socket.
+#[tokio::test]
+async fn the_public_dial_refuses_private_destinations() {
+    let mut headers = BTreeMap::new();
+    headers.insert("Authorization".to_string(), "Bearer secret".to_string());
+
+    // A real loopback listener, so a dial that was *not* refused would succeed
+    // rather than merely fail to connect.
+    let (base, seen) = capture_requests(UNAUTHORIZED_PLAIN).await;
+    assert!(
+        Handle::connect_public_with_headers(&format!("{base}/mcp"), &headers)
+            .await
+            .is_err(),
+        "loopback is not a public address"
+    );
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "the credential must never leave the process for a private destination"
+    );
+
+    for url in [
+        "http://10.0.0.1/mcp",
+        "http://169.254.169.254/latest/meta-data",
+        "http://[::1]/mcp",
+        "file:///etc/hosts",
+    ] {
+        assert!(
+            Handle::connect_public_with_headers(url, &headers)
+                .await
+                .is_err(),
+            "{url} must be refused"
+        );
+    }
+}
