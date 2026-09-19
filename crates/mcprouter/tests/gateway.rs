@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use axum::{Json, Router as AxumRouter, routing::post};
 use mcprouter::gateway::{CallToolArgs, FindToolsArgs};
-use mcprouter::log::JsonlLog;
+use mcprouter::log::{JsonlLog, RecordSink};
 use mcprouter::{BoxFuture, ContractNote, Entry, Gateway, Jev, Router, RouterSettings, Upstreams};
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
 use serde_json::{Value, json};
@@ -171,8 +171,8 @@ async fn gateway(log: Option<&std::path::Path>) -> Gateway {
         ..Default::default()
     };
     let router = Router::new(jev, settings, &entries);
-    let log = match log {
-        Some(p) => Some(JsonlLog::open(p).await.unwrap()),
+    let log: Option<Arc<dyn RecordSink>> = match log {
+        Some(p) => Some(Arc::new(JsonlLog::open(p).await.unwrap())),
         None => None,
     };
     let notes = vec![ContractNote {

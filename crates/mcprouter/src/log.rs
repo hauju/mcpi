@@ -1,4 +1,8 @@
-//! Append-only JSONL log of routing decisions and proxied calls (fine-tune / eval data).
+//! Append-only log of routing decisions and proxied calls (fine-tune / eval data).
+//!
+//! [`JsonlLog`] appends them to a file, which is what the CLI wants. A hosted gateway wants the
+//! same records in its own database, per user — so the gateway holds a [`RecordSink`] rather than
+//! a file, and the file log is just the implementation that ships here.
 
 use std::path::Path;
 
@@ -6,6 +10,7 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
+use crate::BoxFuture;
 use crate::ContractNote;
 use crate::router::Routing;
 
@@ -57,6 +62,16 @@ pub enum Record<'a> {
     },
 }
 
+/// Where the gateway sends its records.
+///
+/// A record borrows from the live routing decision, so the sink is handed a reference and must
+/// finish with it before the call returns — serialise inside `write`, and queue the bytes, not
+/// the record. Failures are the sink's to absorb: losing an eval line must never fail the tool
+/// call that produced it.
+pub trait RecordSink: Send + Sync + 'static {
+    fn write<'a>(&'a self, record: &'a Record<'_>) -> BoxFuture<'a, ()>;
+}
+
 pub struct JsonlLog {
     file: Mutex<tokio::fs::File>,
 }
@@ -89,6 +104,12 @@ impl JsonlLog {
         if let Err(e) = f.write_all(line.as_bytes()).await {
             tracing::warn!(error = %e, "could not write log record");
         }
+    }
+}
+
+impl RecordSink for JsonlLog {
+    fn write<'a>(&'a self, record: &'a Record<'_>) -> BoxFuture<'a, ()> {
+        Box::pin(JsonlLog::write(self, record))
     }
 }
 

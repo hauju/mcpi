@@ -18,7 +18,7 @@ use rmcp::{RoleServer, ServerHandler, schemars, tool, tool_router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::log::{CatalogEntry, JsonlLog, Record, now};
+use crate::log::{CatalogEntry, Record, RecordSink, now};
 use crate::router::{Router, Routing};
 use crate::{ContractNote, Upstreams};
 
@@ -72,7 +72,7 @@ struct LastFind {
 struct Inner {
     upstreams: Arc<dyn Upstreams>,
     router: Router,
-    log: Option<JsonlLog>,
+    log: Option<Arc<dyn RecordSink>>,
     notes: Vec<ContractNote>,
     direct: Vec<Tool>,
     by_key: HashMap<String, usize>,
@@ -108,10 +108,13 @@ fn def_chars(tool: &Tool) -> usize {
 #[tool_router]
 impl Gateway {
     /// `notes` are the upstreams whose contract moved at connect time (from `schemadiff`).
+    ///
+    /// `log` is where routing decisions and proxied calls are recorded — a file for the CLI, a
+    /// database for a hosted gateway, `None` to record nothing.
     pub fn new(
         upstreams: Arc<dyn Upstreams>,
         router: Router,
-        log: Option<JsonlLog>,
+        log: Option<Arc<dyn RecordSink>>,
         notes: Vec<ContractNote>,
     ) -> Self {
         let by_key: HashMap<String, usize> = upstreams

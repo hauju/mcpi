@@ -272,15 +272,15 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 ..Default::default()
             };
             let router = mcprouter::Router::new(jev, settings, live.entries());
-            let log = if no_log {
+            let log: Option<std::sync::Arc<dyn mcprouter::log::RecordSink>> = if no_log {
                 None
             } else {
                 let path = log.unwrap_or_else(|| mcpi_cli::serve::default_log_path(&store_path));
-                Some(
+                Some(std::sync::Arc::new(
                     mcprouter::log::JsonlLog::open(&path).await.map_err(|e| {
                         format!("could not open the log at `{}`: {e}", path.display())
                     })?,
-                )
+                ))
             };
             for n in &notes {
                 eprintln!(
