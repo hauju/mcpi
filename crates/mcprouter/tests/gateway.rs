@@ -8,7 +8,7 @@ use axum::{Json, Router as AxumRouter, routing::post};
 use mcprouter::gateway::{CallToolArgs, FindToolsArgs};
 use mcprouter::log::{JsonlLog, RecordSink};
 use mcprouter::{BoxFuture, ContractNote, Entry, Gateway, Jev, Router, RouterSettings, Upstreams};
-use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
+use rmcp::model::{CallToolResult, ContentBlock, JsonObject, ResultType, Tool};
 use serde_json::{Value, json};
 
 /// Fake `POST /v1/systemone`: scores every choice option by token overlap between the request
@@ -212,6 +212,9 @@ async fn routes_proxies_and_logs() {
     assert_eq!(body["tools"][0]["server"], "alpha");
     assert_eq!(body["tools"][0]["inputSchema"]["required"][0], "id");
     assert_eq!(body["flat"], false);
+    // A ranking that means what it says needs no explaining.
+    assert_eq!(body["verdict"], "ranked");
+    assert!(body.get("note").is_none());
     // alpha has no contract note, so none is attached.
     assert!(body.get("contract_changes").is_none());
 
@@ -244,6 +247,17 @@ async fn routes_proxies_and_logs() {
     let body: Value = serde_json::from_str(&text_of(&vague)).unwrap();
     assert_eq!(body["flat"], true);
     assert_eq!(body["tools"].as_array().unwrap().len(), 2);
+    // The list still comes back, and the verdict says only what it can: nothing
+    // leads, which is not a claim about whether anything fits.
+    assert_eq!(body["verdict"], "uncertain");
+    assert!(
+        body["note"]
+            .as_str()
+            .unwrap()
+            .contains("No tool stands out"),
+        "the verdict must be said in words too: {:?}",
+        body["note"]
+    );
 
     // call_tool proxies by gateway key, including prefixed collision names.
     let r = g
@@ -275,6 +289,14 @@ async fn routes_proxies_and_logs() {
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
+    // The ledger carries the verdict too, so the eval can ask how often each
+    // one fires without replaying the requests.
+    assert!(
+        lines
+            .iter()
+            .filter(|l| l["event"] == "find_tools")
+            .all(|l| l["verdict"].is_string())
+    );
     assert_eq!(lines[0]["event"], "catalog");
     assert_eq!(lines[0]["tools"].as_array().unwrap().len(), 6);
     assert_eq!(lines[0]["contract_changes"][0]["server"], "beta");
@@ -288,5 +310,170 @@ async fn routes_proxies_and_logs() {
     assert_eq!(stats.find_tools, 3);
     assert_eq!(stats.tools["beta__echo"].misses, 1);
     assert!(stats.tools["alpha_get"].def_chars > 50);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An upstream on a protocol revision older than `2026-07-28`: its result reaches
+/// us as it came off the wire, with `resultType` absent (`alpha_get`). `beta_get`
+/// answers on the current revision and carries the discriminator.
+struct Legacy {
+    entries: Vec<Entry>,
+}
+
+impl Upstreams for Legacy {
+    fn entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
+    fn call<'a>(
+        &'a self,
+        key: &'a str,
+        _arguments: Option<JsonObject>,
+    ) -> BoxFuture<'a, Result<CallToolResult, String>> {
+        Box::pin(async move {
+            if key == "beta_get" {
+                // Not reachable over the wire — rmcp's `Deserialize` rejects any
+                // discriminator but `complete` — so it is built in memory. It is
+                // the only way to exercise the half of the fix that leaves an
+                // upstream's own value alone.
+                let mut sent = CallToolResult::success(vec![ContentBlock::text("modern")]);
+                sent.result_type = Some(ResultType::TASK);
+                return Ok(sent);
+            }
+            let wire = match key {
+                "alpha_get" => json!({"content": [{"type": "text", "text": "legacy"}]}),
+                _ => return Err("unknown".into()),
+            };
+            Ok(serde_json::from_value(wire).unwrap())
+        })
+    }
+}
+
+/// The gateway sits between two protocol revisions, so a result that arrives without
+/// `resultType` must not leave without one: a peer that negotiated `2026-07-28`
+/// rejects the response otherwise. rmcp strips the discriminator again for peers on
+/// an older revision, so filling it in here costs those sessions nothing.
+#[tokio::test]
+async fn absent_upstream_result_type_becomes_complete() {
+    let base = fake_typesafe().await;
+    let jev = Jev::new("test", "fake").unwrap().with_base_url(base);
+    let entries = vec![
+        entry(
+            "alpha",
+            "alpha_get",
+            "alpha_get",
+            "Read an alpha record by id",
+            "id",
+        ),
+        entry(
+            "beta",
+            "beta_get",
+            "beta_get",
+            "Read a beta record by id",
+            "id",
+        ),
+    ];
+    let router = Router::new(jev, RouterSettings::default(), &entries);
+    let g = Gateway::new(
+        Arc::new(Legacy {
+            entries: entries.clone(),
+        }),
+        router,
+        None,
+        vec![],
+    );
+
+    let legacy = g
+        .call_tool_in(
+            "t",
+            CallToolArgs {
+                name: "alpha_get".into(),
+                arguments: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(text_of(&legacy), "legacy");
+    assert_eq!(legacy.result_type, Some(ResultType::COMPLETE));
+    // What a `2026-07-28` peer requires on the wire.
+    let wire = serde_json::to_value(&legacy).unwrap();
+    assert_eq!(wire["resultType"], "complete");
+
+    // An upstream that sent the discriminator keeps the one it sent.
+    let modern = g
+        .call_tool_in(
+            "t",
+            CallToolArgs {
+                name: "beta_get".into(),
+                arguments: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(text_of(&modern), "modern");
+    assert_eq!(
+        modern.result_type,
+        Some(ResultType::TASK),
+        "an upstream's own discriminator must survive untouched"
+    );
+}
+
+/// A model that searches twice before calling the first tool must not have that
+/// call scored against the second search: the tool was never offered there, so
+/// the ledger would report a miss for a decision the router got right.
+#[tokio::test]
+async fn a_call_links_to_the_find_that_offered_the_tool() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("mcprouter-link-{}-{nanos}", std::process::id()));
+    let log_path = dir.join("router.jsonl");
+    let g = gateway(Some(&log_path)).await;
+
+    for request in [
+        "read the alpha record with id 42",
+        "create a new beta record titled hello",
+    ] {
+        g.find_tools_in(
+            "s",
+            FindToolsArgs {
+                request: request.into(),
+                k: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    g.call_tool_in(
+        "s",
+        CallToolArgs {
+            name: "alpha_get".into(),
+            arguments: json!({"id": "42"}).as_object().cloned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    let lines: Vec<Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let finds: Vec<&Value> = lines
+        .iter()
+        .filter(|l| l["event"] == "find_tools")
+        .collect();
+    assert_eq!(finds.len(), 2);
+    assert_eq!(finds[0]["returned"][0], "alpha_get");
+    assert_ne!(finds[1]["returned"][0], "alpha_get");
+
+    let call = lines.iter().find(|l| l["event"] == "call_tool").unwrap();
+    assert_eq!(
+        call["find_id"], finds[0]["find_id"],
+        "the call must link to the search that returned the tool"
+    );
+    assert_eq!(call["in_returned"], true);
+    assert_eq!(call["rank"], 0);
     let _ = std::fs::remove_dir_all(dir);
 }

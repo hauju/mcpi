@@ -1,6 +1,6 @@
 //! The MCP server surface: `find_tools`, `call_tool`, plus any tools listed in `expose_direct`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -10,8 +10,8 @@ use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData as McpError,
-    Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-    ServerInfo, Tool,
+    Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ResultType,
+    ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, schemars, tool, tool_router};
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::log::{CatalogEntry, Record, RecordSink, now};
-use crate::router::{Router, Routing};
+use crate::router::{Router, Routing, Verdict};
 use crate::{ContractNote, Upstreams};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -57,17 +57,54 @@ struct FindToolsResult<'a> {
     tools: Vec<FoundTool<'a>>,
     /// True when no tool stood out; the list is the best guess ranking.
     flat: bool,
+    /// Whether the list is an answer, the nearest misses, or a request that
+    /// wanted no tool in the first place.
+    verdict: Verdict,
+    /// That verdict in a sentence, for the model reading this. Absent when the
+    /// ranking speaks for itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<&'static str>,
     /// Upstreams whose contract changed since the gateway last saw them. Only present when
     /// one of the returned tools belongs to such an upstream.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     contract_changes: Vec<&'a ContractNote>,
 }
 
-/// What the last `find_tools` in a session returned, so a following `call_tool` can be scored.
+/// What a `find_tools` in a session returned, so a following `call_tool` can be scored.
 struct LastFind {
     find_id: u64,
     routing: Routing,
 }
+
+impl LastFind {
+    /// Did this decision actually hand the model `name`?
+    fn returned(&self, name: &str) -> bool {
+        self.routing
+            .candidates
+            .iter()
+            .position(|c| c.key == name)
+            .is_some_and(|rank| self.routing.selected.contains(&rank))
+    }
+}
+
+/// How many sessions keep decisions at all.
+///
+/// Nothing tells the gateway a session has ended — a client reconnecting with a
+/// fresh `mcp-session-id` simply never returns — so the map is trimmed by age
+/// instead: past this many sessions the one whose newest decision is oldest is
+/// dropped. Each retained decision holds a `Scored` per catalogued tool, which
+/// is the whole catalog while `shortlist` is 0.
+const LINKED_SESSIONS: usize = 64;
+
+/// How many `find_tools` decisions a session keeps for that scoring.
+///
+/// Only the newest used to be kept, which made the ledger lie about the router:
+/// a model that searches twice and then calls both tools had its first call
+/// scored against the second search, where that tool was never offered — a
+/// rank-25 "miss" for a tool the router had in fact returned at rank 0. A
+/// handful of decisions covers that interleaving; beyond it the call is old
+/// enough that the newest decision is the fairer comparison anyway.
+const LINKED_FINDS: usize = 8;
 
 struct Inner {
     upstreams: Arc<dyn Upstreams>,
@@ -77,7 +114,7 @@ struct Inner {
     direct: Vec<Tool>,
     by_key: HashMap<String, usize>,
     find_seq: AtomicU64,
-    last_find: Mutex<HashMap<String, LastFind>>,
+    last_find: Mutex<HashMap<String, VecDeque<LastFind>>>,
 }
 
 #[derive(Clone)]
@@ -251,15 +288,28 @@ impl Gateway {
         let body = FindToolsResult {
             tools,
             flat: routing.flat,
+            verdict: routing.verdict,
+            note: routing.verdict.note(),
             contract_changes,
         };
         let json = serde_json::to_string(&body)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        inner
-            .last_find
-            .lock()
-            .await
-            .insert(session.to_string(), LastFind { find_id, routing });
+        let mut finds = inner.last_find.lock().await;
+        if finds.len() >= LINKED_SESSIONS && !finds.contains_key(session) {
+            let coldest = finds
+                .iter()
+                .min_by_key(|(_, f)| f.back().map_or(0, |lf| lf.find_id))
+                .map(|(key, _)| key.clone());
+            if let Some(key) = coldest {
+                finds.remove(&key);
+            }
+        }
+        let session_finds = finds.entry(session.to_string()).or_default();
+        if session_finds.len() == LINKED_FINDS {
+            session_finds.pop_front();
+        }
+        session_finds.push_back(LastFind { find_id, routing });
+        drop(finds);
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
@@ -308,16 +358,31 @@ impl Gateway {
         tracing::info!(name, direct, ok, is_error, latency_ms, "call_tool");
         if let Some(log) = &inner.log {
             let last = inner.last_find.lock().await;
-            let linked = last.get(session).map(|lf| {
-                let rank = lf.routing.candidates.iter().position(|c| c.key == name);
-                let in_returned = rank.is_some_and(|r| lf.routing.selected.contains(&r));
-                (
-                    lf.find_id,
-                    rank,
-                    rank.map(|r| lf.routing.candidates[r].p),
-                    in_returned,
-                )
-            });
+            // Score the call against the most recent decision that actually
+            // offered this tool, and only fall back to the newest one when no
+            // decision did — that fallback is a real miss, worth recording.
+            let linked = last
+                .get(session)
+                .and_then(|finds| {
+                    finds
+                        .iter()
+                        .rev()
+                        .find(|lf| lf.returned(name))
+                        .or_else(|| finds.back())
+                })
+                .map(|lf| {
+                    let rank = lf.routing.candidates.iter().position(|c| c.key == name);
+                    (
+                        lf.find_id,
+                        rank,
+                        rank.map(|r| lf.routing.candidates[r].p),
+                        lf.returned(name),
+                    )
+                });
+            // `linked` copies what it needs, and the write below is a database
+            // round trip for a hosted sink — holding the lock across it would
+            // serialise every find_tools and call_tool of the session behind it.
+            drop(last);
             log.write(&Record::CallTool {
                 ts: now(),
                 session,
@@ -335,7 +400,17 @@ impl Gateway {
             .await;
         }
         match result {
-            Ok(r) => Ok(r),
+            Ok(mut r) => {
+                // The two sides of the gateway can sit on different protocol revisions.
+                // An upstream older than `2026-07-28` sends no `resultType` (SEP-2322),
+                // and rmcp only ever strips that discriminator for legacy peers — it
+                // never adds it — so forwarding the upstream's result verbatim to a peer
+                // that did negotiate `2026-07-28` produces a response the spec schema
+                // rejects. Fill in the default the spec assigns to an absent field,
+                // leaving an upstream that sent one untouched.
+                r.result_type.get_or_insert(ResultType::COMPLETE);
+                Ok(r)
+            }
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "upstream `{}` failed: {e}",
                 entry.server

@@ -51,7 +51,8 @@ pub enum Record<'a> {
         server: Option<&'a str>,
         /// True when the client called the tool directly (listed via `expose_direct`).
         direct: bool,
-        /// The most recent `find_tools` in this session, and where this tool ranked in it.
+        /// The most recent `find_tools` in this session that returned this tool,
+        /// and where it ranked there — the newest decision when none did.
         find_id: Option<u64>,
         rank: Option<usize>,
         p: Option<f64>,
@@ -103,6 +104,15 @@ impl JsonlLog {
         let mut f = self.file.lock().await;
         if let Err(e) = f.write_all(line.as_bytes()).await {
             tracing::warn!(error = %e, "could not write log record");
+            return;
+        }
+        // `tokio::fs::File` completes a write on a blocking pool, so `write_all`
+        // returning does not mean the bytes have left the handle. `mcpi-cli
+        // stats` reads this file while the gateway that writes it is still
+        // running, so an unflushed record is one the stats silently miss. One
+        // line per tool call is not a throughput worth trading for that.
+        if let Err(e) = f.flush().await {
+            tracing::warn!(error = %e, "could not flush log record");
         }
     }
 }

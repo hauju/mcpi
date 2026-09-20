@@ -9,6 +9,15 @@ use crate::bm25::Bm25;
 use crate::jev::{Choice, Jev, Noul, Question};
 
 const NONE_OPTION: &str = "none";
+/// Below this mean the three gate nouls say the request wants no tool at all.
+/// The nouls are a mean of three 0-1 judgments, so 0.5 is the neutral point.
+const GATE_FLOOR: f64 = 0.5;
+/// A runner-up scoring at least this fraction of the winner makes the two
+/// comparable, which is what "scored alike" has to mean: a ratio against the
+/// field, never an absolute floor. A winner ten times its nearest rival is a
+/// clear pick however small its probability, because a crowded catalog divides
+/// the mass among everything it contains.
+const UNCERTAIN_MARGIN: f64 = 0.5;
 /// In flat mode, candidates below this probability are not returned (never fewer than one).
 const MIN_FLAT_P: f64 = 0.001;
 
@@ -56,6 +65,49 @@ impl Default for RouterSettings {
     }
 }
 
+/// What the router concluded beyond the ranking itself.
+///
+/// Deliberately missing: "nothing in the catalog fits". A choice distribution
+/// is relative — the probabilities sum to one, so with `n` candidates something
+/// always scores at least `1/n`, and a low top means the field is crowded or
+/// the tools tie, never that none of them work. Reading a weak spread as "no
+/// match" would claim what the answer cannot say: four equally apt tools at
+/// 0.24 with `none` at 0.04 is the model insisting a tool *is* wanted. That
+/// verdict needs a question of its own — one noul asking whether any listed
+/// tool serves the request — which is a fixed extra cost, not one per tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// The request can be answered without calling anything — what the gate
+    /// nouls measure, and what `none` winning the choice means.
+    NoToolNeeded,
+    /// Nothing leads: either the field scored alike or none of it scored high.
+    /// The list is a set of candidates, not a ranking to trust. Which of the two
+    /// produced it is not worth asserting — `flat` and the per-tool `p` are in
+    /// the same payload for a caller that wants to look.
+    Uncertain,
+    /// The ranking means what it says.
+    Ranked,
+}
+
+impl Verdict {
+    /// One line for the model reading the result. `None` when the ranking stands
+    /// on its own and needs no explaining.
+    pub fn note(self) -> Option<&'static str> {
+        match self {
+            Verdict::NoToolNeeded => Some(
+                "This request looks answerable without a tool call; the tools below are only the \
+                 closest matches.",
+            ),
+            Verdict::Uncertain => Some(
+                "No tool stands out here — read the schemas and pick on the merits, or ask again \
+                 more specifically. This does not mean none of them fit.",
+            ),
+            Verdict::Ranked => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Scored {
     pub key: String,
@@ -73,6 +125,8 @@ pub struct Routing {
     pub p_none: f64,
     /// Mean of the "does this request need a tool at all" nouls.
     pub gate: f64,
+    /// What the gate and the distribution together say about the list.
+    pub verdict: Verdict,
     pub input_tokens: u64,
     pub latency_ms: u64,
 }
@@ -191,16 +245,43 @@ impl Router {
         scored.sort_by(|a, b| b.p.total_cmp(&a.p).then_with(|| a.key.cmp(&b.key)));
 
         let (selected, flat) = select(&scored, p_none, k, &self.settings);
+        let top = scored.first().map_or(0.0, |x| x.p);
+        let runner_up = scored.get(1).map_or(0.0, |x| x.p);
+        let verdict = verdict(flat, top, runner_up, p_none, gate);
         Ok(Routing {
             candidates: scored,
             selected,
             flat,
             p_none,
             gate,
+            verdict,
             input_tokens: answers.input_tokens,
             latency_ms,
         })
     }
+}
+
+/// Read the gate and the distribution together.
+///
+/// Takes `select`'s own `flat` rather than recomputing a variant of it, so the
+/// two fields in one payload cannot contradict each other: a flat ranking is
+/// never `Ranked`, and `Ranked` always means a clear winner.
+///
+/// The gate answers "does this need a tool at all". It decides only where the
+/// choice has no strong opinion of its own — three generic nouls must not
+/// overrule a distribution built over the actual catalog, which would steer a
+/// model away from a tool the router rated 0.85. See [`Verdict`] for the
+/// verdict this deliberately cannot reach.
+fn verdict(flat: bool, top: f64, runner_up: f64, p_none: f64, gate: f64) -> Verdict {
+    // Strictly greater: a tie is the model having no opinion, which `flat`
+    // already carries, not a positive claim that no tool is wanted.
+    if p_none > top || (gate < GATE_FLOOR && flat) {
+        return Verdict::NoToolNeeded;
+    }
+    if flat || runner_up >= top * UNCERTAIN_MARGIN {
+        return Verdict::Uncertain;
+    }
+    Verdict::Ranked
 }
 
 /// Deterministic selection over a descending-sorted distribution.
@@ -251,6 +332,78 @@ mod tests {
                 p: *p,
             })
             .collect()
+    }
+
+    /// A flat ranking is read against the gate: the nouls decide only where the
+    /// choice itself has no opinion.
+    #[test]
+    fn a_weak_spread_is_read_against_the_gate() {
+        assert_eq!(verdict(true, 0.2, 0.15, 0.05, 0.9), Verdict::Uncertain);
+        assert_eq!(verdict(true, 0.2, 0.15, 0.05, 0.2), Verdict::NoToolNeeded);
+    }
+
+    /// Four equally apt tools split the vote; `none` at 0.04 says a tool *is*
+    /// wanted. The verdict may not read that as a catalog that cannot serve the
+    /// request, and the note may not imply one.
+    #[test]
+    fn tools_that_tie_are_uncertain_never_a_verdict_on_the_catalog() {
+        assert_eq!(verdict(true, 0.24, 0.24, 0.04, 0.9), Verdict::Uncertain);
+        assert!(
+            Verdict::Uncertain
+                .note()
+                .is_some_and(|n| n.contains("does not mean none of them fit")),
+            "the note must not imply a missing capability"
+        );
+    }
+
+    /// A crowded catalog divides the probability mass, so the winner's absolute
+    /// value says nothing on its own. Ten times the runner-up is a clear pick at
+    /// 0.29 exactly as it would be at 0.9.
+    #[test]
+    fn a_clear_winner_stays_clear_however_crowded_the_field() {
+        assert_eq!(verdict(false, 0.29, 0.03, 0.02, 0.9), Verdict::Ranked);
+        // Halve the margin and the two become comparable.
+        assert_eq!(verdict(false, 0.29, 0.15, 0.02, 0.9), Verdict::Uncertain);
+    }
+
+    /// The gate is generic; the choice is built over the real catalog. A
+    /// confident pick must survive nouls that read the request as conversational.
+    #[test]
+    fn the_gate_does_not_overrule_a_confident_choice() {
+        assert_eq!(verdict(false, 0.85, 0.05, 0.01, 0.433), Verdict::Ranked);
+    }
+
+    /// `flat` and `verdict` come out of the same numbers and must never
+    /// disagree: an unreliable ranking cannot also be one that means what it says.
+    #[test]
+    fn a_flat_ranking_is_never_ranked() {
+        for (top, runner_up, p_none, gate) in [
+            (0.40, 0.05, 0.40, 0.9),
+            (0.29, 0.03, 0.02, 0.9),
+            (0.20, 0.19, 0.01, 0.9),
+        ] {
+            assert_ne!(
+                verdict(true, top, runner_up, p_none, gate),
+                Verdict::Ranked,
+                "flat ranking reported as trustworthy: {top} / {runner_up}"
+            );
+        }
+    }
+
+    #[test]
+    fn none_winning_the_choice_reads_as_no_tool_needed() {
+        // Even a confident top tool loses to a `none` the model rates higher.
+        assert_eq!(verdict(false, 0.4, 0.1, 0.45, 0.9), Verdict::NoToolNeeded);
+        assert_eq!(verdict(false, 0.4, 0.1, 0.05, 0.9), Verdict::Ranked);
+    }
+
+    /// Every verdict but `Ranked` has to say something, or the field tells the
+    /// model nothing it can act on.
+    #[test]
+    fn only_a_plain_ranking_goes_unexplained() {
+        assert!(Verdict::Ranked.note().is_none());
+        assert!(Verdict::Uncertain.note().is_some());
+        assert!(Verdict::NoToolNeeded.note().is_some());
     }
 
     #[test]
