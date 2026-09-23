@@ -133,7 +133,9 @@ impl Jev {
                         body: body.chars().take(300).collect(),
                     });
                 }
-                Err(e) if attempt < ATTEMPTS && (e.is_connect() || e.is_timeout()) => {
+                // Only a failed connect proves the request was never sent. A timeout may
+                // have reached TypeSafe and been billed, so retrying it could pay twice.
+                Err(e) if attempt < ATTEMPTS && e.is_connect() => {
                     tokio::time::sleep(retry_after).await;
                 }
                 Err(e) => return Err(e.into()),

@@ -37,7 +37,8 @@ pub struct RouterSettings {
     pub k_max: usize,
     /// Tools are added in probability order until their cumulative probability reaches this.
     pub cumulative: f64,
-    /// Below this max probability the distribution counts as flat and top-k is returned anyway.
+    /// Below this max probability the distribution counts as flat and top-k is returned anyway —
+    /// unless the top tool clearly leads its runner-up, which a crowded catalog makes common.
     pub flat_threshold: f64,
     /// BM25 shortlist size sent to Jev; `0` sends every tool.
     pub shortlist: usize,
@@ -120,7 +121,7 @@ pub struct Routing {
     pub candidates: Vec<Scored>,
     /// Indices into `candidates` that `find_tools` returns.
     pub selected: Vec<usize>,
-    /// Max tool probability was below the flat threshold (or `none` won): top-k returned anyway.
+    /// No tool clearly led (or `none` won): top-k returned anyway.
     pub flat: bool,
     pub p_none: f64,
     /// Mean of the "does this request need a tool at all" nouls.
@@ -165,6 +166,13 @@ impl Router {
         request: &str,
         k: Option<usize>,
     ) -> Result<Routing, Error> {
+        // `onelines` and the BM25 index are positional over the construction slice; a
+        // different slice would route over the wrong descriptions without failing.
+        assert_eq!(
+            entries.len(),
+            self.onelines.len(),
+            "Router::route called with a different catalog than Router::new"
+        );
         let k = k
             .unwrap_or(self.settings.k_default)
             .clamp(1, self.settings.k_max);
@@ -242,6 +250,19 @@ impl Router {
                     .unwrap_or(0.0),
             })
             .collect();
+        // An absent key reads as 0, so a response keyed differently than the criteria
+        // would silently collapse the ranking to flat. Say so when most are missing.
+        let missing = candidates
+            .iter()
+            .filter(|&&i| !pick.probabilities.contains_key(&entries[i].key))
+            .count();
+        if missing * 2 > candidates.len() {
+            tracing::warn!(
+                missing,
+                candidates = candidates.len(),
+                "Jev returned no probability for most candidates"
+            );
+        }
         scored.sort_by(|a, b| b.p.total_cmp(&a.p).then_with(|| a.key.cmp(&b.key)));
 
         let (selected, flat) = select(&scored, p_none, k, &self.settings);
@@ -286,11 +307,13 @@ fn verdict(flat: bool, top: f64, runner_up: f64, p_none: f64, gate: f64) -> Verd
 
 /// Deterministic selection over a descending-sorted distribution.
 /// Adds tools until cumulative probability reaches `cumulative`, capped at `k`, never empty.
-/// If the top tool is below `flat_threshold` or `none` beats it, the distribution is flat and
-/// the top `k` (minus zero-mass padding) are returned instead.
+/// If `none` beats the top tool, or the top tool is below `flat_threshold` without clearly
+/// leading its runner-up (see [`UNCERTAIN_MARGIN`]), the distribution is flat and the top `k`
+/// (minus zero-mass padding) are returned instead.
 fn select(sorted: &[Scored], p_none: f64, k: usize, s: &RouterSettings) -> (Vec<usize>, bool) {
     let top = sorted.first().map_or(0.0, |x| x.p);
-    let flat = top < s.flat_threshold || p_none >= top;
+    let runner_up = sorted.get(1).map_or(0.0, |x| x.p);
+    let flat = p_none >= top || (top < s.flat_threshold && runner_up >= top * UNCERTAIN_MARGIN);
     if flat {
         let n = sorted
             .iter()
@@ -404,6 +427,18 @@ mod tests {
         assert!(Verdict::Ranked.note().is_none());
         assert!(Verdict::Uncertain.note().is_some());
         assert!(Verdict::NoToolNeeded.note().is_some());
+    }
+
+    /// `select` and `verdict` together: a winner ten times its runner-up in a
+    /// crowded catalog is not flat, so it reaches `Ranked` as the margin promises.
+    #[test]
+    fn a_crowded_clear_winner_is_ranked_end_to_end() {
+        let st = RouterSettings::default();
+        let sorted = s(&[("a", 0.25), ("b", 0.025), ("c", 0.02)]);
+        let (selected, flat) = select(&sorted, 0.01, 5, &st);
+        assert!(!flat, "a clear lead below flat_threshold is not flat");
+        assert_eq!(selected[0], 0);
+        assert_eq!(verdict(flat, 0.25, 0.025, 0.01, 0.9), Verdict::Ranked);
     }
 
     #[test]
