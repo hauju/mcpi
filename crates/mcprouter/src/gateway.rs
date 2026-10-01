@@ -50,6 +50,9 @@ struct FoundTool<'a> {
     input_schema: &'a JsonObject,
     /// Router probability that this is the right tool.
     p: f64,
+    /// The proxy tool to call this one through. Absent when it is `call_tool`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_with: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -256,6 +259,7 @@ impl Gateway {
                     description: e.tool.description.as_deref(),
                     input_schema: &e.tool.input_schema,
                     p: c.p,
+                    call_with: inner.upstreams.call_with(&e.key),
                 })
             })
             .collect();

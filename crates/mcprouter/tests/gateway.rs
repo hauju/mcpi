@@ -110,6 +110,11 @@ impl Upstreams for Fake {
             ))]))
         })
     }
+
+    /// Creating a beta record is the one tool this fake gates.
+    fn call_with(&self, key: &str) -> Option<&str> {
+        (key == "beta_create").then_some("call_tool_approval")
+    }
 }
 
 fn text_of(r: &CallToolResult) -> String {
@@ -421,6 +426,37 @@ async fn absent_upstream_result_type_becomes_complete() {
 /// A model that searches twice before calling the first tool must not have that
 /// call scored against the second search: the tool was never offered there, so
 /// the ledger would report a miss for a decision the router got right.
+/// A tool that has to go through another proxy tool says so where the model first meets it,
+/// and a tool that does not carries no such field at all.
+#[tokio::test]
+async fn find_tools_names_the_proxy_tool_a_gated_tool_needs() {
+    let g = gateway(None).await;
+    let find = |request: &'static str| {
+        let g = g.clone();
+        async move {
+            let found = g
+                .find_tools_in(
+                    "t",
+                    FindToolsArgs {
+                        request: request.into(),
+                        k: None,
+                    },
+                )
+                .await
+                .unwrap();
+            serde_json::from_str::<Value>(&text_of(&found)).unwrap()
+        }
+    };
+
+    let gated = find("create a new beta record titled x").await;
+    assert_eq!(gated["tools"][0]["name"], "beta_create");
+    assert_eq!(gated["tools"][0]["call_with"], "call_tool_approval");
+
+    let open = find("read the alpha record with id 42").await;
+    assert_eq!(open["tools"][0]["name"], "alpha_get");
+    assert!(open["tools"][0].get("call_with").is_none());
+}
+
 #[tokio::test]
 async fn a_call_links_to_the_find_that_offered_the_tool() {
     let nanos = std::time::SystemTime::now()

@@ -103,6 +103,15 @@ pub trait Upstreams: Send + Sync + 'static {
         key: &'a str,
         arguments: Option<JsonObject>,
     ) -> BoxFuture<'a, Result<CallToolResult, String>>;
+
+    /// The proxy tool `key` has to be called through, when that is not `call_tool`.
+    ///
+    /// A gateway that puts some tools behind a second proxy tool — one a client can ask its
+    /// user about before running — names it here, and `find_tools` passes the name on with the
+    /// tool. Without it the model learns which tool to use from a refused call.
+    fn call_with(&self, _key: &str) -> Option<&str> {
+        None
+    }
 }
 
 #[cfg(test)]
