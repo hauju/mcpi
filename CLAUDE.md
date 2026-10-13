@@ -406,6 +406,11 @@ letter grade starts a fight where "4 tools return no annotations" gets fixed.
   clippy does, which counts findings rather than rating the server. `Level` says only whether the
   spec word is MUST or SHOULD; it describes the spec, not the server, so it gets a text weight and
   never a colour. Red and amber mean the contract moved, everywhere in this app.
+- **A client's review policy is never the spec's word.** Rules a client enforces beyond the spec
+  (today only OpenAI's app review: explicit `readOnlyHint`/`destructiveHint`/`openWorldHint` on
+  every tool) carry `Source::OpenAiApps`, cite the client by name in the text report, render as
+  `OpenAI` instead of MUST/SHOULD in the app, and are always `Level::Note` so a server that never
+  targets that client cannot fail `lint` in CI.
 - **Conformance findings render above the call form**, for the same reason `ItemChanges` does: a
   violated MUST gets the tool dropped by a conforming client, which is worth knowing before you try
   to call it. Server-level findings (`tool: None`) go in `ServerSummary` — hence `Conformance`'s

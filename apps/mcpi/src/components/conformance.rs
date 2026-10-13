@@ -9,7 +9,7 @@
 use dioxus::prelude::*;
 use dioxus_free_icons::Icon;
 use dioxus_free_icons::icons::ld_icons::LdBookOpen;
-use mcplint::{Finding, Level};
+use mcplint::{Finding, Level, Source};
 
 use crate::state::AppState;
 
@@ -63,12 +63,18 @@ pub fn Conformance(tool: Option<String>, #[props(default)] bare: bool) -> Elemen
                             } else {
                                 "shrink-0 mt-px text-base-content/35 tabular-nums"
                             },
-                            title: if finding.level == Level::Warning {
-                                "The spec says MUST"
-                            } else {
-                                "The spec says SHOULD"
+                            // A client's review policy is not the spec's
+                            // word, so it is labelled with who requires it.
+                            title: match (finding.source, finding.level) {
+                                (Source::Spec, Level::Warning) => "The spec says MUST".to_string(),
+                                (Source::Spec, Level::Note) => "The spec says SHOULD".to_string(),
+                                (source, _) => format!("Required by {}, not by the MCP spec", source.label()),
                             },
-                            if finding.level == Level::Warning { "MUST" } else { "SHOULD" }
+                            match (finding.source, finding.level) {
+                                (Source::Spec, Level::Warning) => "MUST",
+                                (Source::Spec, Level::Note) => "SHOULD",
+                                (Source::OpenAiApps, _) => "OpenAI",
+                            }
                         }
                         div { class: "min-w-0",
                             p { class: "text-base-content/75 selectable", "{finding.fact}" }

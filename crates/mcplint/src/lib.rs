@@ -19,6 +19,12 @@
 //! by name, so duplicates were collapsed before we could see them) and
 //! `x-mcp-header` root-reachability (the spec's reachability definition is
 //! more precise than we can honestly reimplement from memory).
+//!
+//! A few rules come from a client's own review rather than the spec — today
+//! only OpenAI's app review, which rejects tools the spec considers fine.
+//! Those carry a [`Source`] naming who makes the rule, so no surface ever
+//! presents a client's policy as the spec's word, and they are always
+//! [`Level::Note`]: a server that never targets that client must not fail CI.
 
 use schemadiff::Snapshot;
 use serde_json::Value;
@@ -41,10 +47,38 @@ pub enum Level {
     Note,
 }
 
+/// Who makes the rule a finding cites.
+///
+/// `Spec` is the MCP specification at [`SPEC`]. Anything else is a client's
+/// own review policy, which can demand more than the spec does; it is named so
+/// a reader can tell "the spec says" from "this client requires".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Spec,
+    /// OpenAI's app review (ChatGPT apps and plugins).
+    OpenAiApps,
+}
+
+impl Source {
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Spec => "MCP spec",
+            Source::OpenAiApps => "OpenAI app review",
+        }
+    }
+}
+
+/// The hints OpenAI's app review requires on every tool, as explicit booleans.
+/// The spec makes all of them optional and calls `destructiveHint` meaningful
+/// only when `readOnlyHint` is false — the review asks for it regardless.
+const OPENAI_REQUIRED_HINTS: [&str; 3] = ["readOnlyHint", "destructiveHint", "openWorldHint"];
+
 /// One fact about the contract, with its citation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Finding {
     pub level: Level,
+    /// Who makes the rule — the spec, or a named client's review policy.
+    pub source: Source,
     /// Stable kebab-case rule id, e.g. `input-schema-missing`.
     pub rule: &'static str,
     /// Where the rule comes from, e.g. `tools §inputSchema`. The spec
@@ -60,12 +94,14 @@ pub struct Finding {
 pub fn lint(snapshot: &Snapshot) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut without_annotations = 0usize;
+    let mut without_openai_hints = Vec::new();
 
     for (name, tool) in &snapshot.tools {
         let start = findings.len();
         let Some(tool_object) = tool.as_object() else {
             findings.push(Finding {
                 level: Level::Warning,
+                source: Source::Spec,
                 rule: "tool-shape",
                 cite: "tools §Tool",
                 tool: Some(name.clone()),
@@ -80,8 +116,17 @@ pub fn lint(snapshot: &Snapshot) -> Vec<Finding> {
         lint_headers(name, tool_object.get("inputSchema"), &mut findings);
         lint_descriptions(name, tool_object, &mut findings);
 
-        if tool_object.get("annotations").is_none() {
+        let annotations = tool_object.get("annotations");
+        if annotations.is_none() {
             without_annotations += 1;
+        }
+        let explicit = |hint: &str| {
+            annotations
+                .and_then(|a| a.get(hint))
+                .is_some_and(Value::is_boolean)
+        };
+        if !OPENAI_REQUIRED_HINTS.iter().all(|hint| explicit(hint)) {
+            without_openai_hints.push(name.as_str());
         }
 
         findings[start..].sort_by_key(|f| f.level);
@@ -90,6 +135,7 @@ pub fn lint(snapshot: &Snapshot) -> Vec<Finding> {
     if without_annotations > 0 {
         findings.push(Finding {
             level: Level::Note,
+            source: Source::Spec,
             rule: "tool-annotations-absent",
             cite: "tools §ToolAnnotations",
             tool: None,
@@ -97,6 +143,24 @@ pub fn lint(snapshot: &Snapshot) -> Vec<Finding> {
                 "{without_annotations} of {} tools declare no annotations \
                  (readOnlyHint, destructiveHint, idempotentHint, openWorldHint)",
                 snapshot.tools.len()
+            ),
+        });
+    }
+
+    if !without_openai_hints.is_empty() {
+        findings.push(Finding {
+            level: Level::Note,
+            source: Source::OpenAiApps,
+            rule: "openai-annotation-hints-missing",
+            cite: "plugin guidelines §Correct annotation",
+            tool: None,
+            fact: format!(
+                "{} of {} tools do not set {} explicitly, which OpenAI's app review \
+                 requires on every tool: {}",
+                without_openai_hints.len(),
+                snapshot.tools.len(),
+                OPENAI_REQUIRED_HINTS.join(", "),
+                without_openai_hints.join(", ")
             ),
         });
     }
@@ -126,6 +190,7 @@ fn lint_name(name: &str, findings: &mut Vec<Finding>) {
     if let Some(fact) = fact {
         findings.push(Finding {
             level: Level::Note,
+            source: Source::Spec,
             rule: "tool-name-format",
             cite: "tools §name",
             tool: Some(name.to_string()),
@@ -138,6 +203,7 @@ fn lint_input_schema(name: &str, schema: Option<&Value>, findings: &mut Vec<Find
     let mut warn = |fact: String| {
         findings.push(Finding {
             level: Level::Warning,
+            source: Source::Spec,
             rule: "input-schema-invalid",
             cite: "tools §inputSchema",
             tool: Some(name.to_string()),
@@ -169,6 +235,7 @@ fn lint_input_schema(name: &str, schema: Option<&Value>, findings: &mut Vec<Find
     {
         findings.push(Finding {
             level: Level::Note,
+            source: Source::Spec,
             rule: "input-schema-type",
             cite: "tools §inputSchema",
             tool: Some(name.to_string()),
@@ -186,6 +253,7 @@ fn lint_input_schema(name: &str, schema: Option<&Value>, findings: &mut Vec<Find
     if !has_properties && !closed {
         findings.push(Finding {
             level: Level::Note,
+            source: Source::Spec,
             rule: "no-arg-schema-open",
             cite: "tools §inputSchema",
             tool: Some(name.to_string()),
@@ -203,6 +271,7 @@ fn lint_output_schema(name: &str, schema: Option<&Value>, findings: &mut Vec<Fin
     if !schema.is_object() {
         findings.push(Finding {
             level: Level::Warning,
+            source: Source::Spec,
             rule: "output-schema-invalid",
             cite: "tools §outputSchema",
             tool: Some(name.to_string()),
@@ -229,6 +298,7 @@ fn lint_headers(name: &str, schema: Option<&Value>, findings: &mut Vec<Finding>)
         let mut warn = |rule: &'static str, fact: String| {
             findings.push(Finding {
                 level: Level::Warning,
+                source: Source::Spec,
                 rule,
                 cite: "tools §x-mcp-header",
                 tool: Some(name.to_string()),
@@ -325,6 +395,7 @@ fn lint_descriptions(
     if !described {
         findings.push(Finding {
             level: Level::Note,
+            source: Source::Spec,
             rule: "tool-description-missing",
             cite: "tools §description",
             tool: Some(name.to_string()),
@@ -351,6 +422,7 @@ fn lint_descriptions(
     if !missing.is_empty() {
         findings.push(Finding {
             level: Level::Note,
+            source: Source::Spec,
             rule: "property-descriptions-missing",
             cite: "tools §inputSchema",
             tool: Some(name.to_string()),
@@ -376,7 +448,8 @@ fn kind(value: &Value) -> &'static str {
 }
 
 /// Plain-text report: findings grouped by tool, warnings first, the spec
-/// revision stated once. The CLI prints this verbatim; any future surface
+/// revision stated once. A finding from a client's review names that client in
+/// its citation, since the header's spec revision does not cover it. The CLI prints this verbatim; any future surface
 /// must render the same facts rather than inventing its own summary.
 pub fn to_text(subtitle: &str, findings: &[Finding]) -> String {
     let warnings = findings
@@ -408,9 +481,13 @@ pub fn to_text(subtitle: &str, findings: &[Finding]) -> String {
             Level::Warning => "warning",
             Level::Note => "note",
         };
+        let cite = match finding.source {
+            Source::Spec => finding.cite.to_string(),
+            source => format!("{}: {}", source.label(), finding.cite),
+        };
         out.push_str(&format!(
-            "- {level} · {} — {}  [{}]\n",
-            finding.rule, finding.fact, finding.cite
+            "- {level} · {} — {}  [{cite}]\n",
+            finding.rule, finding.fact
         ));
     }
     out

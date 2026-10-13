@@ -25,7 +25,7 @@ fn clean_tool() -> Value {
             },
             "additionalProperties": false
         },
-        "annotations": { "readOnlyHint": true }
+        "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false }
     })
 }
 
@@ -42,7 +42,7 @@ fn a_clean_contract_stays_silent() {
 #[test]
 fn a_missing_input_schema_is_a_warning() {
     let findings = lint(&snapshot_with(json!({
-        "broken": { "description": "d", "annotations": {} }
+        "broken": { "description": "d", "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false } }
     })));
     assert!(rules(&findings).contains(&"input-schema-invalid"));
     assert_eq!(findings[0].level, Level::Warning);
@@ -51,7 +51,7 @@ fn a_missing_input_schema_is_a_warning() {
 #[test]
 fn a_null_input_schema_is_named_as_null() {
     let findings = lint(&snapshot_with(json!({
-        "broken": { "description": "d", "annotations": {}, "inputSchema": null }
+        "broken": { "description": "d", "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false }, "inputSchema": null }
     })));
     assert!(findings[0].fact.contains("null"));
 }
@@ -89,7 +89,7 @@ fn an_open_no_arg_schema_is_a_note() {
     let findings = lint(&snapshot_with(json!({
         "ping": {
             "description": "d",
-            "annotations": {},
+            "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
             "inputSchema": { "type": "object" }
         }
     })));
@@ -101,7 +101,7 @@ fn the_recommended_no_arg_form_is_silent() {
     let findings = lint(&snapshot_with(json!({
         "ping": {
             "description": "d",
-            "annotations": {},
+            "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
             "inputSchema": { "type": "object", "additionalProperties": false }
         }
     })));
@@ -113,7 +113,7 @@ fn header_rules_catch_syntax_duplicates_and_number() {
     let findings = lint(&snapshot_with(json!({
         "call_api": {
             "description": "d",
-            "annotations": {},
+            "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -157,7 +157,7 @@ fn a_header_behind_a_ref_is_still_checked() {
     let findings = lint(&snapshot_with(json!({
         "call_api": {
             "description": "d",
-            "annotations": {},
+            "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -186,7 +186,7 @@ fn a_declared_output_schema_must_be_an_object() {
 fn missing_descriptions_are_counted_by_name() {
     let findings = lint(&snapshot_with(json!({
         "quiet": {
-            "annotations": {},
+            "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false },
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -227,7 +227,7 @@ fn absent_annotations_aggregate_into_one_server_note() {
 #[test]
 fn warnings_sort_before_notes_within_a_tool() {
     let findings = lint(&snapshot_with(json!({
-        "bad name": { "description": "d", "annotations": {} }
+        "bad name": { "description": "d", "annotations": { "readOnlyHint": true, "destructiveHint": false, "openWorldHint": false } }
     })));
     assert_eq!(findings[0].rule, "input-schema-invalid");
     assert_eq!(findings[0].level, Level::Warning);
@@ -242,4 +242,49 @@ fn the_text_report_groups_by_tool_and_states_the_spec() {
     assert!(text.contains(SPEC));
     assert!(text.contains("## broken"));
     assert!(text.contains("## server"), "annotations note group: {text}");
+}
+
+#[test]
+fn openai_hints_are_reported_under_openai_not_the_spec() {
+    let mut partial = clean_tool();
+    partial["annotations"] = json!({ "title": "Partial", "readOnlyHint": true });
+    let mut bare = clean_tool();
+    bare.as_object_mut().unwrap().remove("annotations");
+    let mut stringly = clean_tool();
+    stringly["annotations"]["openWorldHint"] = json!("false");
+    let findings = lint(&snapshot_with(json!({
+        "partial": partial,
+        "bare": bare,
+        "stringly": stringly,
+        "complete": clean_tool(),
+    })));
+    let note = findings
+        .iter()
+        .find(|f| f.rule == "openai-annotation-hints-missing")
+        .expect("openai note");
+    assert_eq!(note.source, Source::OpenAiApps);
+    assert_eq!(
+        note.level,
+        Level::Note,
+        "a client's policy must never fail CI"
+    );
+    assert_eq!(note.tool, None);
+    assert!(note.fact.contains("3 of 4"), "{}", note.fact);
+    assert!(!note.fact.contains("complete"), "{}", note.fact);
+
+    let text = to_text("fixture 0.0.0", &findings);
+    assert!(text.contains("OpenAI app review: "), "{text}");
+}
+
+#[test]
+fn spec_findings_keep_a_bare_citation() {
+    let findings = lint(&snapshot_with(json!({ "broken": { "description": "d" } })));
+    assert!(
+        findings
+            .iter()
+            .filter(|f| f.rule != "openai-annotation-hints-missing")
+            .all(|f| f.source == Source::Spec)
+    );
+    let text = to_text("fixture 0.0.0", &findings);
+    assert!(text.contains("[tools §inputSchema]"), "{text}");
 }
