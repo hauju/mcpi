@@ -930,3 +930,218 @@ async fn redirects_stay_on_the_named_host() {
     let other = client.get(format!("{base}/other")).send().await.unwrap();
     assert_eq!(other.status(), 302);
 }
+
+// ── Server cards (SEP-2127) ─────────────────────────────────────────────────
+
+fn card_json(endpoint: &str, version: &str, protocols: &str) -> String {
+    format!(
+        r#"{{"$schema":"https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+            "name":"com.example/fixture","version":"{version}","description":"A fixture",
+            "remotes":[{{"type":"streamable-http","url":"{endpoint}","supportedProtocolVersions":[{protocols}]}}]}}"#
+    )
+}
+
+#[tokio::test]
+async fn a_card_at_the_reserved_location_that_agrees_is_a_note() {
+    let base = serve_with(|base| {
+        HashMap::from([
+            ("POST /mcp", initialize_ok()),
+            (
+                "GET /mcp/server-card",
+                json_response(&card_json(
+                    &format!("{base}/mcp"),
+                    "1.2.3",
+                    r#""2025-06-18""#,
+                )),
+            ),
+        ])
+    })
+    .await;
+
+    let report = probe(&format!("{base}/mcp")).await;
+
+    let card = report.server_card.as_ref().expect("card found");
+    assert!(card.card_url.ends_with("/mcp/server-card"));
+    assert!(mismatches(card, &report).is_empty());
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.severity == Severity::Note && f.title == "Server card published")
+    );
+    assert!(report.checks().contains(&Check {
+        label: "Card matches server".into(),
+        present: true
+    }));
+}
+
+#[tokio::test]
+async fn a_catalog_card_that_contradicts_the_handshake_says_how() {
+    // Card reached through the catalog, not the reserved path, and wrong on
+    // both facts it can be checked on.
+    let base = serve_with(|base| {
+        HashMap::from([
+            ("POST /mcp", initialize_ok()),
+            (
+                "GET /.well-known/ai-catalog.json",
+                json_response(&format!(
+                    r#"{{"specVersion":"1.0","entries":[
+                        {{"identifier":"urn:air:x:mcp:other","type":"application/mcp-server-card+json",
+                          "data":{}}},
+                        {{"identifier":"urn:air:x:mcp:fixture","type":"application/mcp-server-card+json",
+                          "url":"/cards/fixture.json"}}]}}"#,
+                    card_json(&format!("{base}/elsewhere"), "9.9.9", "")
+                )),
+            ),
+            (
+                "GET /cards/fixture.json",
+                json_response(&card_json(&format!("{base}/mcp/"), "2.0.0", r#""2025-03-26""#)),
+            ),
+        ])
+    })
+    .await;
+
+    let report = probe(&format!("{base}/mcp")).await;
+
+    let card = report.server_card.as_ref().expect("card found");
+    assert!(
+        card.card_url.ends_with("/cards/fixture.json"),
+        "the inline card names another endpoint and must not be taken: {}",
+        card.card_url
+    );
+    let found = mismatches(card, &report);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].contains("2.0.0") && found[0].contains("1.2.3"));
+    assert!(found[1].contains("2025-06-18"));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.severity == Severity::Warning && f.title.contains("contradicts"))
+    );
+}
+
+#[tokio::test]
+async fn no_card_anywhere_is_a_note_and_an_absent_check() {
+    let base = serve(HashMap::from([("POST /mcp", initialize_ok())])).await;
+
+    let report = probe(&format!("{base}/mcp")).await;
+
+    assert!(report.server_card.is_none());
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.severity == Severity::Note && f.title == "No server card")
+    );
+    let checks = report.checks();
+    assert!(checks.contains(&Check {
+        label: "Server card".into(),
+        present: false
+    }));
+    // An open server publishes no OAuth metadata, and the checklist must not
+    // list that as something missing.
+    assert!(
+        !checks.iter().any(|c| c.label.contains("metadata")),
+        "{checks:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_web_page_gets_no_card_lookup_and_no_checklist() {
+    let base = serve(HashMap::from([("/docs", html_response("<p>docs</p>"))])).await;
+
+    let report = probe(&format!("{base}/docs")).await;
+
+    assert!(report.checks().is_empty());
+    assert!(!report.findings.iter().any(|f| f.title.contains("card")));
+}
+
+#[test]
+fn templated_remotes_never_match_an_endpoint() {
+    let card = ServerCard {
+        card_url: "https://x/card".into(),
+        name: "com.x/y".into(),
+        version: "1".into(),
+        title: None,
+        description: None,
+        remotes: vec![Remote {
+            transport: "streamable-http".into(),
+            url: "https://{tenant}.x.com/mcp".into(),
+            protocol_versions: Vec::new(),
+        }],
+    };
+    assert!(card.remote_for("https://{tenant}.x.com/mcp").is_none());
+}
+
+#[tokio::test]
+async fn discovery_follows_the_catalog_to_an_unconventional_path() {
+    let base = serve_with(|base| {
+        HashMap::from([
+            (
+                "GET /.well-known/ai-catalog.json",
+                json_response(&format!(
+                    r#"{{"specVersion":"1.0","entries":[{{"identifier":"urn:air:x:mcp:f",
+                        "type":"application/mcp-server-card+json","url":"{base}/rpc/server-card"}}]}}"#
+                )),
+            ),
+            (
+                "GET /rpc/server-card",
+                json_response(&card_json(&format!("{base}/rpc"), "1.2.3", "")),
+            ),
+            ("POST /rpc", initialize_ok()),
+        ])
+    })
+    .await;
+
+    let result = discover(&base, async |_| true).await;
+
+    assert!(result.catalog.is_some());
+    assert_eq!(result.found.len(), 1, "found: {:?}", result.found);
+    let hit = &result.found[0];
+    assert!(hit.url.ends_with("/rpc"));
+    assert_eq!(hit.source, CandidateSource::Advertised);
+    assert!(hit.report.server_card.is_some());
+}
+
+#[tokio::test]
+async fn discovery_credits_the_catalog_for_a_convention_it_also_lists() {
+    let base = serve_with(|base| {
+        HashMap::from([
+            (
+                "GET /.well-known/ai-catalog.json",
+                json_response(&format!(
+                    r#"{{"specVersion":"1.0","entries":[{{"identifier":"urn:air:x:mcp:f",
+                        "type":"application/mcp-server-card+json","data":{}}}]}}"#,
+                    card_json(&format!("{base}/mcp"), "1.2.3", "")
+                )),
+            ),
+            ("POST /mcp", initialize_ok()),
+        ])
+    })
+    .await;
+
+    let result = discover(&base, async |_| true).await;
+
+    assert_eq!(result.found.len(), 1, "found: {:?}", result.found);
+    assert_eq!(result.found[0].source, CandidateSource::Advertised);
+}
+
+#[tokio::test]
+async fn discovery_asks_before_fetching_a_linked_card() {
+    // A catalog may point at cards on any host; each one is a request the
+    // caller's policy has to approve like every other.
+    let base = serve(HashMap::from([(
+        "GET /.well-known/ai-catalog.json",
+        json_response(
+            r#"{"specVersion":"1.0","entries":[{"identifier":"urn:air:x:mcp:f",
+                "type":"application/mcp-server-card+json","url":"http://10.0.0.1/card"}]}"#,
+        ),
+    )]))
+    .await;
+
+    let result = discover(&base, async |url| !url.contains("10.0.0.1")).await;
+
+    assert!(result.catalog.is_some());
+    assert!(!result.tried.iter().any(|url| url.contains("10.0.0.1")));
+}

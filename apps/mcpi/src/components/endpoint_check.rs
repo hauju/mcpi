@@ -7,7 +7,9 @@
 
 use dioxus::prelude::*;
 use dioxus_free_icons::Icon;
-use dioxus_free_icons::icons::ld_icons::{LdCircleAlert, LdCircleCheck, LdInfo, LdTriangleAlert};
+use dioxus_free_icons::icons::ld_icons::{
+    LdCircle, LdCircleAlert, LdCircleCheck, LdInfo, LdTriangleAlert,
+};
 use probe::{EndpointKind, Severity};
 
 use crate::state::AppState;
@@ -43,6 +45,7 @@ pub fn EndpointCheck() -> Element {
 fn Verdict(report: probe::Report) -> Element {
     let app = use_context::<AppState>();
 
+    let checks = report.checks();
     let candidates = match &report.kind {
         Some(EndpointKind::WebPage { candidates }) => candidates.clone(),
         _ => Vec::new(),
@@ -62,6 +65,10 @@ fn Verdict(report: probe::Report) -> Element {
                         }
                     }
                 }
+            }
+
+            if !checks.is_empty() {
+                Checklist { checks }
             }
 
             if report.findings.is_empty() {
@@ -109,15 +116,21 @@ fn FindingRow(finding: probe::Finding) -> Element {
     let (tone, icon) = match finding.severity {
         Severity::Blocker => (
             "text-error",
-            rsx! { Icon { icon: LdCircleAlert, width: 13, height: 13 } },
+            rsx! {
+                Icon { icon: LdCircleAlert, width: 13, height: 13 }
+            },
         ),
         Severity::Warning => (
             "text-warning",
-            rsx! { Icon { icon: LdTriangleAlert, width: 13, height: 13 } },
+            rsx! {
+                Icon { icon: LdTriangleAlert, width: 13, height: 13 }
+            },
         ),
         Severity::Note => (
             "text-info/70",
-            rsx! { Icon { icon: LdInfo, width: 13, height: 13 } },
+            rsx! {
+                Icon { icon: LdInfo, width: 13, height: 13 }
+            },
         ),
     };
 
@@ -127,6 +140,29 @@ fn FindingRow(finding: probe::Finding) -> Element {
             div { class: "min-w-0 space-y-0.5",
                 p { class: "text-[13px] leading-snug", "{finding.title}" }
                 p { class: "text-xs text-base-content/55 leading-snug", "{finding.detail}" }
+            }
+        }
+    }
+}
+
+/// What a client can discover before connecting, at a glance. Facts, not a
+/// grade: no colour and no total, so an absent card reads as "not published"
+/// rather than as a failing mark next to somebody else's server.
+#[component]
+fn Checklist(checks: Vec<probe::Check>) -> Element {
+    rsx! {
+        div { class: "px-3 py-2 grid grid-cols-2 gap-x-3 gap-y-1",
+            for check in checks {
+                div {
+                    key: "{check.label}",
+                    class: if check.present { "flex items-center gap-1.5 text-xs text-base-content/75" } else { "flex items-center gap-1.5 text-xs text-base-content/40" },
+                    if check.present {
+                        Icon { icon: LdCircleCheck, width: 12, height: 12 }
+                    } else {
+                        Icon { icon: LdCircle, width: 12, height: 12 }
+                    }
+                    span { "{check.label}" }
+                }
             }
         }
     }

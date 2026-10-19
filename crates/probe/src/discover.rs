@@ -6,7 +6,8 @@
 //! `/mcp` or `/api/mcp` on the main host or on an `mcp.` subdomain,
 //! occasionally at `/sse` for the legacy transport, and the pages that miss
 //! name the URL they document. Two bounded waves cover all of it — the conventions, then
-//! whatever the fetched pages themselves referred to. No crawl, no headless
+//! whatever the site advertised (a SEP-2127 AI Catalog at
+//! `/.well-known/ai-catalog.json`) or its fetched pages referred to. No crawl, no headless
 //! browser: the long tail past these conventions is exactly the part a person
 //! can paste as a URL directly.
 //!
@@ -21,6 +22,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 
+use crate::card::{self, Entry, ServerCard};
 use crate::{EndpointKind, Report, endpoint};
 
 /// Per-request budget. Tighter than the single-endpoint probe's: a discovery
@@ -51,6 +53,10 @@ pub enum CandidateSource {
     /// Named by the site itself — found in the homepage markup, or on a page
     /// a convention candidate turned out to be.
     Referred,
+    /// Listed as a remote in a Server Card the domain's AI Catalog points
+    /// at: the site saying where its server is, in the format meant for it.
+    /// Wins over every other source for the same URL.
+    Advertised,
 }
 
 /// An endpoint that answered the MCP handshake, with the identification that
@@ -73,6 +79,10 @@ pub struct Discovery {
     pub host: String,
     /// Every URL actually contacted, in the order contacted.
     pub tried: Vec<String>,
+    /// The AI Catalog that parsed, when the domain publishes one — even one
+    /// listing no MCP server, which is still an answer.
+    #[serde(default)]
+    pub catalog: Option<String>,
     /// Endpoints that spoke MCP — including auth-gated servers that answer
     /// the handshake with a challenge — or the legacy HTTP+SSE transport,
     /// which is a real server needing a client with a fallback. Aliases
@@ -142,25 +152,53 @@ async fn discover_scoped(
 
     let homepage = homepage_url(&base);
     let fetch_homepage = approve(&homepage).await;
+    let catalog = card::catalog_url(&base);
+    let fetch_catalog = approve(&catalog).await;
 
-    let (first, referrals) = tokio::join!(identify_all(&client, approved_first), async {
-        if fetch_homepage {
-            homepage_referrals(&client, &homepage).await
-        } else {
-            Vec::new()
+    let (first, referrals, cards) = tokio::join!(
+        identify_all(&client, approved_first),
+        async {
+            if fetch_homepage {
+                homepage_referrals(&client, &homepage).await
+            } else {
+                Vec::new()
+            }
+        },
+        async {
+            if fetch_catalog {
+                catalog_cards(&client, &catalog, &approve).await
+            } else {
+                None
+            }
         }
-    });
+    );
     discovery
         .tried
         .extend(first.iter().map(|candidate| candidate.url.clone()));
     if fetch_homepage {
         discovery.tried.push(homepage);
     }
+    if fetch_catalog {
+        discovery.tried.push(catalog.clone());
+    }
+    let cards = match cards {
+        Some((cards, contacted)) => {
+            discovery.catalog = Some(catalog);
+            discovery.tried.extend(contacted);
+            cards
+        }
+        None => Vec::new(),
+    };
 
     // Second wave: what the site itself named — in its homepage, or on pages
     // the first wave landed on. One level only; a referral's referrals are
     // where discovery stops and a pasted URL takes over.
     let mut second: Vec<(String, CandidateSource)> = Vec::new();
+    for remote in cards.iter().flat_map(|card| &card.remotes) {
+        if !remote.url.contains('{') {
+            push_unique(&mut second, remote.url.clone(), CandidateSource::Advertised);
+        }
+    }
     for url in referrals {
         push_unique(&mut second, url, CandidateSource::Referred);
     }
@@ -172,7 +210,13 @@ async fn discover_scoped(
         }
     }
     second.retain(|(url, _)| !discovery.tried.contains(url));
-    second.truncate(MAX_REFERRALS);
+    // The cap bounds what pages can talk discovery into. The catalog has its
+    // own cap on cards, so what it advertises is not counted against this.
+    let advertised = second
+        .iter()
+        .filter(|(_, source)| *source == CandidateSource::Advertised)
+        .count();
+    second.truncate(advertised + MAX_REFERRALS);
     let mut approved_second = Vec::new();
     for (url, source) in second {
         if approve(&url).await {
@@ -184,8 +228,45 @@ async fn discover_scoped(
         .tried
         .extend(second.iter().map(|candidate| candidate.url.clone()));
 
-    discovery.found = collapse_aliases(first.into_iter().chain(second).filter(spoke_mcp).collect());
+    let mut hits: Vec<Discovered> = first.into_iter().chain(second).filter(spoke_mcp).collect();
+    // A convention hit the catalog also lists is the site's advertised
+    // endpoint, and it carries the card that says so.
+    for hit in &mut hits {
+        if let Some(card) = cards
+            .iter()
+            .find(|card| card.remote_for(&hit.url).is_some())
+        {
+            hit.source = CandidateSource::Advertised;
+            hit.report.server_card = Some(card.clone());
+        }
+    }
+    discovery.found = collapse_aliases(hits);
     discovery
+}
+
+/// The cards an AI Catalog lists — a linked card fetched only if approved —
+/// plus the card URLs actually contacted. `None` when no catalog parsed.
+async fn catalog_cards(
+    client: &httpguard::Client,
+    catalog: &str,
+    approve: &impl AsyncFn(&str) -> bool,
+) -> Option<(Vec<ServerCard>, Vec<String>)> {
+    let entries = card::catalog_entries(client, catalog).await?;
+    let mut cards = Vec::new();
+    let mut contacted = Vec::new();
+    for entry in entries {
+        match entry {
+            Entry::Inline(card) => cards.push(card),
+            Entry::Linked(url) => {
+                if !approve(&url).await {
+                    continue;
+                }
+                contacted.push(url.clone());
+                cards.extend(card::fetch_card(client, &url).await);
+            }
+        }
+    }
+    Some((cards, contacted))
 }
 
 /// Accept what people type: a bare domain, or a full URL pasted from

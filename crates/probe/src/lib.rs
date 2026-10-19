@@ -23,12 +23,14 @@ use serde_json::Value;
 
 pub use httpguard;
 
+mod card;
 mod discover;
 mod discovery;
 mod endpoint;
 #[cfg(test)]
 mod tests;
 
+pub use card::{Remote, ServerCard, mismatches};
 pub use discover::{CandidateSource, Discovered, Discovery, discover, discover_public};
 pub use discovery::{AuthServer, ProtectedResource};
 
@@ -159,6 +161,10 @@ pub struct Report {
     pub challenge: Option<String>,
     pub protected_resource: Option<ProtectedResource>,
     pub authorization_server: Option<AuthServer>,
+    /// The SEP-2127 card describing this endpoint, from its reserved
+    /// `/server-card` location or the domain's AI Catalog.
+    #[serde(default)]
+    pub server_card: Option<ServerCard>,
     pub findings: Vec<Finding>,
 }
 
@@ -172,6 +178,71 @@ impl Report {
         self.findings
             .iter()
             .filter(|f| f.severity == Severity::Blocker)
+    }
+
+    /// What a client can discover about this endpoint before connecting, one
+    /// line per mechanism, for a glance-sized view next to the findings.
+    ///
+    /// A checklist, not a score: each line says only whether something is
+    /// published. Lines that do not apply are left out rather than counted —
+    /// an open server has no OAuth metadata to publish, and listing that as
+    /// missing would grade it for being open. Empty for anything that is not
+    /// an MCP endpoint, where none of it means anything.
+    pub fn checks(&self) -> Vec<Check> {
+        if !matches!(self.kind, Some(EndpointKind::Mcp | EndpointKind::LegacySse)) {
+            return Vec::new();
+        }
+        let mut checks = vec![Check::new(
+            "Streamable HTTP",
+            matches!(self.kind, Some(EndpointKind::Mcp)),
+        )];
+        checks.push(Check::new("Server card", self.server_card.is_some()));
+        if let Some(card) = &self.server_card {
+            checks.push(Check::new(
+                "Card matches server",
+                card::mismatches(card, self).is_empty(),
+            ));
+        }
+        let gated = self.challenge.is_some()
+            || self.protected_resource.is_some()
+            || self.authorization_server.is_some();
+        if gated {
+            checks.push(Check::new(
+                "Protected-resource metadata",
+                self.protected_resource.is_some(),
+            ));
+            checks.push(Check::new(
+                "Authorization-server metadata",
+                self.authorization_server.is_some(),
+            ));
+        }
+        if let Some(auth) = &self.authorization_server {
+            checks.push(Check::new(
+                "Self-service client registration",
+                auth.registration_endpoint.is_some() || auth.client_id_metadata_document,
+            ));
+            checks.push(Check::new(
+                "PKCE S256",
+                auth.code_challenge_methods.iter().any(|m| m == "S256"),
+            ));
+        }
+        checks
+    }
+}
+
+/// One line of [`Report::checks`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Check {
+    pub label: String,
+    pub present: bool,
+}
+
+impl Check {
+    fn new(label: &str, present: bool) -> Self {
+        Self {
+            label: label.to_string(),
+            present,
+        }
     }
 }
 
@@ -243,7 +314,16 @@ async fn probe_scoped(url: &str, public_only: bool) -> Report {
     // its metadata is the only way to find that out before signing in.
     discovery::resolve(&client, url, &mut report).await;
 
+    // A card describes a server, so only a server is worth looking one up for.
+    if matches!(
+        report.kind,
+        Some(EndpointKind::Mcp | EndpointKind::LegacySse)
+    ) {
+        card::resolve(&client, url, &mut report).await;
+    }
+
     derive_findings(&mut report);
+    card::derive_findings(&mut report);
     report
         .findings
         .sort_by_key(|f| std::cmp::Reverse(f.severity));
