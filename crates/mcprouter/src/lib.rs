@@ -17,6 +17,7 @@ pub mod gateway;
 pub mod jev;
 pub mod log;
 pub mod router;
+pub mod scrub;
 pub mod serve;
 pub mod stats;
 

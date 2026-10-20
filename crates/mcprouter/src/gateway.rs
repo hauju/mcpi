@@ -240,9 +240,10 @@ impl Gateway {
         args: FindToolsArgs,
     ) -> Result<CallToolResult, McpError> {
         let inner = &self.inner;
+        let request = crate::scrub::scrub(&args.request);
         let routing = inner
             .router
-            .route(self.entries(), &args.request, args.k)
+            .route(self.entries(), &request, args.k)
             .await
             .map_err(|e| McpError::internal_error(format!("routing failed: {e}"), None))?;
         let find_id = inner.find_seq.fetch_add(1, Ordering::Relaxed) + 1;
@@ -270,7 +271,7 @@ impl Gateway {
             .collect();
         let returned: Vec<&str> = tools.iter().map(|t| t.name).collect();
         tracing::info!(
-            request = %excerpt(&args.request),
+            request = %excerpt(&request),
             returned = ?returned,
             flat = routing.flat,
             latency_ms = routing.latency_ms,
@@ -282,7 +283,7 @@ impl Gateway {
                 ts: now(),
                 session,
                 find_id,
-                request: &args.request,
+                request: &request,
                 k: args.k.unwrap_or(inner.router.settings().k_default),
                 routing: &routing,
                 returned: returned.clone(),
