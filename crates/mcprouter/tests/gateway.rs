@@ -175,7 +175,7 @@ async fn gateway(log: Option<&std::path::Path>) -> Gateway {
         expose_direct: vec!["alpha_get".into(), "missing".into()],
         ..Default::default()
     };
-    let router = Router::new(jev, settings, &entries);
+    let router = Router::new(jev, settings, &entries, None, Vec::new()).await;
     let log: Option<Arc<dyn RecordSink>> = match log {
         Some(p) => Some(Arc::new(JsonlLog::open(p).await.unwrap())),
         None => None,
@@ -378,7 +378,7 @@ async fn absent_upstream_result_type_becomes_complete() {
             "id",
         ),
     ];
-    let router = Router::new(jev, RouterSettings::default(), &entries);
+    let router = Router::new(jev, RouterSettings::default(), &entries, None, Vec::new()).await;
     let g = Gateway::new(
         Arc::new(Legacy {
             entries: entries.clone(),

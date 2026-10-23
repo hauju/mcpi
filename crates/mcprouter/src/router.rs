@@ -1,12 +1,14 @@
 //! Tool selection: one Jev `choice` over the candidates plus three gate nouls, then a
 //! deterministic selection rule (cumulative probability, `k` bounds, flat-distribution fallback).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::Entry;
 use crate::bm25::Bm25;
 use crate::jev::{Choice, Jev, Noul, Question};
+use crate::retrieval::{self, Embedder, PastRequest, RetrievalStats};
 
 const NONE_OPTION: &str = "none";
 /// Below this mean the three gate nouls say the request wants no tool at all.
@@ -40,7 +42,8 @@ pub struct RouterSettings {
     /// Below this max probability the distribution counts as flat and top-k is returned anyway —
     /// unless the top tool clearly leads its runner-up, which a crowded catalog makes common.
     pub flat_threshold: f64,
-    /// BM25 shortlist size sent to Jev; `0` sends every tool.
+    /// Shortlist size sent to Jev; `0` sends every tool. BM25 picks it, fused with embeddings
+    /// and routing memory when the router has an [`Embedder`].
     pub shortlist: usize,
     /// Requests longer than this are truncated before routing (characters).
     pub max_request_chars: usize,
@@ -130,6 +133,9 @@ pub struct Routing {
     pub verdict: Verdict,
     pub input_tokens: u64,
     pub latency_ms: u64,
+    /// Which sources built the shortlist, when embeddings took part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval: Option<RetrievalStats>,
 }
 
 pub struct Router {
@@ -137,21 +143,67 @@ pub struct Router {
     settings: RouterSettings,
     bm25: Option<Bm25>,
     onelines: Vec<String>,
+    /// Only kept when there is a shortlist to build.
+    embedder: Option<Arc<dyn Embedder>>,
+    /// One per entry, positional like `onelines`. `None` when embedding the catalog failed.
+    tool_vecs: Option<Vec<Vec<f32>>>,
+    /// Past requests whose tool is in this catalog, as (entry index, request embedding).
+    memory: Vec<(usize, Vec<f32>)>,
 }
 
 impl Router {
-    pub fn new(jev: Jev, settings: RouterSettings, entries: &[Entry]) -> Self {
+    /// Build a router over `entries`.
+    ///
+    /// With an `embedder`, a catalog larger than `settings.shortlist` is embedded here, once,
+    /// and the shortlist fuses BM25 with embedding similarity and `memory`. Without one —
+    /// or with a catalog small enough to send whole — `memory` is unused and routing is plain
+    /// BM25 (or no shortlist at all).
+    pub async fn new(
+        jev: Jev,
+        settings: RouterSettings,
+        entries: &[Entry],
+        embedder: Option<Arc<dyn Embedder>>,
+        memory: Vec<PastRequest>,
+    ) -> Self {
         let onelines: Vec<String> = entries
             .iter()
             .map(|e| e.oneline(settings.max_description_chars))
             .collect();
         let bm25 = (settings.shortlist > 0 && entries.len() > settings.shortlist)
             .then(|| Bm25::new(onelines.iter().map(String::as_str)));
+        let embedder = embedder.filter(|_| bm25.is_some());
+        let mut tool_vecs = None;
+        let mut memory_idx = Vec::new();
+        if let Some(embedder) = &embedder {
+            match embedder.embed(&onelines).await {
+                Ok(v) if v.len() == onelines.len() => tool_vecs = Some(v),
+                Ok(v) => tracing::warn!(
+                    got = v.len(),
+                    want = onelines.len(),
+                    "embedder returned the wrong number of tool vectors; no embedding ranking"
+                ),
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not embed the catalog; no embedding ranking")
+                }
+            }
+            let index: HashMap<&str, usize> = entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.key.as_str(), i))
+                .collect();
+            memory_idx = memory
+                .into_iter()
+                .filter_map(|m| Some((*index.get(m.tool_key.as_str())?, m.embedding)))
+                .collect();
+        }
         Self {
             jev,
             settings,
             bm25,
             onelines,
+            embedder,
+            tool_vecs,
+            memory: memory_idx,
         }
     }
 
@@ -177,10 +229,7 @@ impl Router {
             .unwrap_or(self.settings.k_default)
             .clamp(1, self.settings.k_max);
         let request = truncate_chars(request, self.settings.max_request_chars);
-        let candidates: Vec<usize> = match &self.bm25 {
-            Some(index) => index.top(&request, self.settings.shortlist),
-            None => (0..entries.len()).collect(),
-        };
+        let (candidates, retrieval) = self.shortlist(entries.len(), &request).await;
         if candidates.is_empty() {
             return Err(Error::NoCandidates);
         }
@@ -278,7 +327,86 @@ impl Router {
             verdict,
             input_tokens: answers.input_tokens,
             latency_ms,
+            retrieval,
         })
+    }
+
+    /// The catalog indices Jev ranks for `request`: every tool when the catalog fits, else the
+    /// top `shortlist` by BM25 — fused with embeddings and memory when there is an embedder.
+    async fn shortlist(
+        &self,
+        n_entries: usize,
+        request: &str,
+    ) -> (Vec<usize>, Option<RetrievalStats>) {
+        let Some(index) = &self.bm25 else {
+            return ((0..n_entries).collect(), None);
+        };
+        let n = self.settings.shortlist;
+        let Some(embedder) = &self.embedder else {
+            return (index.top(request, n), None);
+        };
+
+        let started = Instant::now();
+        let query = match embedder.embed(&[request.to_string()]).await {
+            Ok(mut v) if v.len() == 1 => v.pop(),
+            Ok(v) => {
+                tracing::warn!(
+                    got = v.len(),
+                    "embedder returned the wrong number of vectors"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not embed the request; shortlisting by BM25");
+                None
+            }
+        };
+        let embed_ms = query.as_ref().map(|_| started.elapsed().as_millis() as u64);
+
+        // Each source votes with its own top `n` only. Fused over full rankings, a tool that
+        // one source ranks first and the other not at all loses to any tool both rank
+        // middling — exactly the paraphrase this exists to catch. Every document in BM25
+        // order is kept for padding: the zero-score tail is filler, not a vote.
+        let ranked = index.ranked(request);
+        let lexical: Vec<usize> = ranked
+            .iter()
+            .take_while(|(_, s)| *s > 0.0)
+            .take(n)
+            .map(|(i, _)| *i)
+            .collect();
+        let dense: Vec<usize> = match (&query, &self.tool_vecs) {
+            (Some(q), Some(tools)) => retrieval::rank_by_cosine(q, tools)
+                .into_iter()
+                .take(n)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let remembered: Vec<usize> = query
+            .as_ref()
+            .map(|q| retrieval::rank_by_memory(q, &self.memory))
+            .unwrap_or_default();
+
+        let mut out: Vec<usize> = retrieval::rrf(&[&lexical, &dense, &remembered]);
+        out.truncate(n);
+        for (i, _) in &ranked {
+            if out.len() >= n {
+                break;
+            }
+            if !out.contains(i) {
+                out.push(*i);
+            }
+        }
+
+        let count = |list: &[usize]| out.iter().filter(|i| list.contains(i)).count();
+        let bm25_top: Vec<usize> = ranked.iter().take(n).map(|(i, _)| *i).collect();
+        let stats = RetrievalStats {
+            bm25: count(&lexical),
+            embedding: count(&dense),
+            memory: count(&remembered),
+            beyond_bm25: out.iter().filter(|i| !bm25_top.contains(i)).count(),
+            embed_ms,
+        };
+        (out, Some(stats))
     }
 }
 
@@ -347,6 +475,196 @@ fn truncate_chars(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BoxFuture;
+    use crate::retrieval::EmbedError;
+    use rmcp::model::{JsonObject, Tool};
+
+    fn entry(key: &str, desc: &str) -> Entry {
+        Entry {
+            key: key.into(),
+            server: "s".into(),
+            tool: Tool::new(
+                key.to_string(),
+                desc.to_string(),
+                Arc::new(JsonObject::new()),
+            ),
+        }
+    }
+
+    /// Words that mean the same thing share a dimension; every other word is invisible. So a
+    /// paraphrase lands next to its tool without sharing a single token with it.
+    struct Concepts;
+
+    const CONCEPTS: &[&[&str]] = &[
+        &["email", "mail", "note", "message"],
+        &["send", "dispatch", "deliver"],
+        &["widgets", "gadgets"],
+        &["inbox", "mailbox"],
+    ];
+
+    fn concepts(text: &str) -> Vec<f32> {
+        let mut v = vec![0.0; CONCEPTS.len()];
+        for term in crate::bm25::tokenize(text) {
+            for (dim, words) in CONCEPTS.iter().enumerate() {
+                if words.contains(&term.as_str()) {
+                    v[dim] += 1.0;
+                }
+            }
+        }
+        v
+    }
+
+    impl Embedder for Concepts {
+        fn embed<'a>(
+            &'a self,
+            texts: &'a [String],
+        ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+            Box::pin(async move { Ok(texts.iter().map(|t| concepts(t)).collect()) })
+        }
+    }
+
+    struct Broken;
+
+    impl Embedder for Broken {
+        fn embed<'a>(
+            &'a self,
+            _texts: &'a [String],
+        ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+            Box::pin(async { Err(EmbedError("model unavailable".into())) })
+        }
+    }
+
+    const SHORTLIST: usize = 5;
+
+    /// Sixty fillers that share "my" and "to" with the requests below, so BM25 fills its
+    /// shortlist with them, plus two tools no request shares a word with.
+    fn catalog() -> Vec<Entry> {
+        let mut entries: Vec<Entry> = (0..60)
+            .map(|i| {
+                entry(
+                    &format!("tool_{i}"),
+                    &format!("lists my widgets to page {i}"),
+                )
+            })
+            .collect();
+        entries.push(entry("send_email", "send an email via gmail"));
+        entries.push(entry("archive_thread", "archive old conversations"));
+        entries
+    }
+
+    fn settings() -> RouterSettings {
+        RouterSettings {
+            shortlist: SHORTLIST,
+            ..RouterSettings::default()
+        }
+    }
+
+    async fn router(
+        entries: &[Entry],
+        embedder: Option<Arc<dyn Embedder>>,
+        memory: Vec<PastRequest>,
+    ) -> Router {
+        let jev = Jev::new("test-key", crate::jev::DEFAULT_MODEL).unwrap();
+        Router::new(jev, settings(), entries, embedder, memory).await
+    }
+
+    fn keys<'a>(entries: &'a [Entry], idx: &[usize]) -> Vec<&'a str> {
+        idx.iter().map(|&i| entries[i].key.as_str()).collect()
+    }
+
+    const PARAPHRASE: &str = "dispatch a note to my boss";
+
+    #[tokio::test]
+    async fn a_paraphrase_with_no_shared_word_still_reaches_jev() {
+        let entries = catalog();
+        let plain = router(&entries, None, Vec::new()).await;
+        let (bm25, stats) = plain.shortlist(entries.len(), PARAPHRASE).await;
+        assert!(stats.is_none());
+        assert!(
+            !keys(&entries, &bm25).contains(&"send_email"),
+            "the premise: BM25 alone drops it"
+        );
+
+        let hybrid = router(&entries, Some(Arc::new(Concepts)), Vec::new()).await;
+        let (fused, stats) = hybrid.shortlist(entries.len(), PARAPHRASE).await;
+        assert_eq!(fused.len(), SHORTLIST);
+        assert!(keys(&entries, &fused).contains(&"send_email"));
+        let stats = stats.expect("embeddings took part");
+        assert_eq!((stats.embedding, stats.beyond_bm25), (1, 1));
+        assert!(stats.embed_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_memory_vote_alone_pulls_a_tool_in() {
+        let entries = catalog();
+        let request = "clean up my mailbox";
+        // "archive old conversations" has no concept the stub knows: only memory can vote.
+        let forgetful = router(&entries, Some(Arc::new(Concepts)), Vec::new()).await;
+        let (without, _) = forgetful.shortlist(entries.len(), request).await;
+        assert!(!keys(&entries, &without).contains(&"archive_thread"));
+
+        let memory = vec![
+            PastRequest {
+                tool_key: "archive_thread".into(),
+                embedding: concepts("tidy the inbox"),
+            },
+            // A tool that left the catalog is ignored, not an error.
+            PastRequest {
+                tool_key: "gone".into(),
+                embedding: concepts("inbox"),
+            },
+        ];
+        let remembering = router(&entries, Some(Arc::new(Concepts)), memory).await;
+        let (with, stats) = remembering.shortlist(entries.len(), request).await;
+        assert!(keys(&entries, &with).contains(&"archive_thread"));
+        assert_eq!(stats.unwrap().memory, 1);
+    }
+
+    #[tokio::test]
+    async fn no_embedder_is_todays_bm25_shortlist_exactly() {
+        let entries = catalog();
+        let onelines: Vec<String> = entries
+            .iter()
+            .map(|e| e.oneline(settings().max_description_chars))
+            .collect();
+        let today = Bm25::new(onelines.iter().map(String::as_str));
+        let memory = vec![PastRequest {
+            tool_key: "send_email".into(),
+            embedding: vec![1.0, 0.0, 0.0, 0.0],
+        }];
+        let r = router(&entries, None, memory).await;
+        for request in [PARAPHRASE, "widgets page 7", "nothing matches"] {
+            let (got, stats) = r.shortlist(entries.len(), request).await;
+            assert_eq!(got, today.top(request, SHORTLIST), "{request}");
+            assert!(stats.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failing_embedder_falls_back_to_bm25() {
+        let entries = catalog();
+        let plain = router(&entries, None, Vec::new()).await;
+        let broken = router(&entries, Some(Arc::new(Broken)), Vec::new()).await;
+        for request in [PARAPHRASE, "widgets page 7"] {
+            let (want, _) = plain.shortlist(entries.len(), request).await;
+            let (got, stats) = broken.shortlist(entries.len(), request).await;
+            assert_eq!(got, want, "{request}");
+            let stats = stats.expect("an embedder was configured");
+            assert_eq!(
+                (stats.embedding, stats.memory, stats.embed_ms),
+                (0, 0, None)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_catalog_that_fits_goes_to_jev_whole() {
+        let entries: Vec<Entry> = catalog().into_iter().take(SHORTLIST).collect();
+        let r = router(&entries, Some(Arc::new(Broken)), Vec::new()).await;
+        let (got, stats) = r.shortlist(entries.len(), PARAPHRASE).await;
+        assert_eq!(got, (0..SHORTLIST).collect::<Vec<_>>());
+        assert!(stats.is_none());
+    }
 
     fn s(keys: &[(&str, f64)]) -> Vec<Scored> {
         keys.iter()

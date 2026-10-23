@@ -271,7 +271,8 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
                 expose_direct,
                 ..Default::default()
             };
-            let router = mcprouter::Router::new(jev, settings, live.entries());
+            let router =
+                mcprouter::Router::new(jev, settings, live.entries(), None, Vec::new()).await;
             let log: Option<std::sync::Arc<dyn mcprouter::log::RecordSink>> = if no_log {
                 None
             } else {

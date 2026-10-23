@@ -65,6 +65,15 @@ impl Bm25 {
 
     /// Document indices ordered by descending score, at most `n`.
     pub fn top(&self, query: &str, n: usize) -> Vec<usize> {
+        self.ranked(query)
+            .into_iter()
+            .take(n)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Every document with its score, by descending score, ties by index.
+    pub fn ranked(&self, query: &str) -> Vec<(usize, f64)> {
         let n_docs = self.docs.len() as f64;
         let q = tokenize(query);
         let mut scores: Vec<(usize, f64)> = self
@@ -86,7 +95,7 @@ impl Bm25 {
             })
             .collect();
         scores.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-        scores.into_iter().take(n).map(|(i, _)| i).collect()
+        scores
     }
 }
 

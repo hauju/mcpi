@@ -236,7 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(base) = std::env::var(mcprouter::jev::BASE_URL_ENV) {
         jev = jev.with_base_url(base);
     }
-    let router = Router::new(jev, settings.clone(), &entries);
+    let router = Router::new(jev, settings.clone(), &entries, None, Vec::new()).await;
     let mut model = Totals::default();
     let mut tokens = 0u64;
     let mut latency = Vec::new();

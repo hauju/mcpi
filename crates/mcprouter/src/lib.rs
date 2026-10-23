@@ -9,6 +9,9 @@
 //! `k` bounds, the flat-distribution fallback, the never-empty guarantee, and which tools are
 //! exposed directly. The model only ranks.
 //!
+//! Past `shortlist` tools, BM25 narrows the catalog before Jev ranks it; given an [`Embedder`],
+//! embedding similarity and routing memory vote beside BM25 (see [`retrieval`]).
+//!
 //! This crate does not know how upstreams are dialled — [`Upstreams`] is the seam. The CLI
 //! implements it over `mcpclient` handles; a hosted gateway can implement it over anything.
 
@@ -16,6 +19,7 @@ pub mod bm25;
 pub mod gateway;
 pub mod jev;
 pub mod log;
+pub mod retrieval;
 pub mod router;
 pub mod scrub;
 pub mod serve;
@@ -28,6 +32,7 @@ use rmcp::model::{CallToolResult, JsonObject, Tool};
 
 pub use gateway::Gateway;
 pub use jev::Jev;
+pub use retrieval::{EmbedError, Embedder, PastRequest};
 pub use router::{Router, RouterSettings, Routing};
 pub use stats::{Stats, Thresholds};
 
