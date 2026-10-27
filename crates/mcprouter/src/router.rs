@@ -1,5 +1,6 @@
-//! Tool selection: one Jev `choice` over the candidates plus three gate nouls, then a
-//! deterministic selection rule (cumulative probability, `k` bounds, flat-distribution fallback).
+//! Tool selection: one Jev `choice` over the candidates plus three gate nouls and a compound
+//! noul, then a deterministic selection rule (cumulative probability, `k` bounds,
+//! flat-distribution fallback, compound extension).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -22,6 +23,12 @@ const GATE_FLOOR: f64 = 0.5;
 const UNCERTAIN_MARGIN: f64 = 0.5;
 /// In flat mode, candidates below this probability are not returned (never fewer than one).
 const MIN_FLAT_P: f64 = 0.001;
+/// Above this the compound noul says the request asks for more than one thing.
+const COMPOUND_FLOOR: f64 = 0.5;
+/// For a compound request, tools at or above this probability are added past the cumulative
+/// cutoff. A single choice puts the second wanted tool far below the first (0.03–0.21 on the
+/// golden set) but well clear of the field, which scores ~0.
+const COMPOUND_MIN_P: f64 = 0.02;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -268,6 +275,12 @@ impl Router {
                     instructions: "Can `request` be answered with prose alone, with no tool call and no external data?".into(),
                 }),
             ),
+            (
+                "compound",
+                Question::Noul(Noul {
+                    instructions: "Does `request` ask for two or more separate things that would each need its own tool call?".into(),
+                }),
+            ),
         ]
         .into_iter()
         .map(|(k, q)| (k.to_string(), q))
@@ -314,7 +327,8 @@ impl Router {
         }
         scored.sort_by(|a, b| b.p.total_cmp(&a.p).then_with(|| a.key.cmp(&b.key)));
 
-        let (selected, flat) = select(&scored, p_none, k, &self.settings);
+        let compound = noul("compound") > COMPOUND_FLOOR;
+        let (selected, flat) = select(&scored, p_none, k, compound, &self.settings);
         let top = scored.first().map_or(0.0, |x| x.p);
         let runner_up = scored.get(1).map_or(0.0, |x| x.p);
         let verdict = verdict(flat, top, runner_up, p_none, gate);
@@ -435,10 +449,18 @@ fn verdict(flat: bool, top: f64, runner_up: f64, p_none: f64, gate: f64) -> Verd
 
 /// Deterministic selection over a descending-sorted distribution.
 /// Adds tools until cumulative probability reaches `cumulative`, capped at `k`, never empty.
+/// A `compound` request keeps adding past that point while tools score `COMPOUND_MIN_P`: one
+/// choice cannot put mass on two answers, so the second tool a request needs trails far behind.
 /// If `none` beats the top tool, or the top tool is below `flat_threshold` without clearly
 /// leading its runner-up (see [`UNCERTAIN_MARGIN`]), the distribution is flat and the top `k`
 /// (minus zero-mass padding) are returned instead.
-fn select(sorted: &[Scored], p_none: f64, k: usize, s: &RouterSettings) -> (Vec<usize>, bool) {
+fn select(
+    sorted: &[Scored],
+    p_none: f64,
+    k: usize,
+    compound: bool,
+    s: &RouterSettings,
+) -> (Vec<usize>, bool) {
     let top = sorted.first().map_or(0.0, |x| x.p);
     let runner_up = sorted.get(1).map_or(0.0, |x| x.p);
     let flat = p_none >= top || (top < s.flat_threshold && runner_up >= top * UNCERTAIN_MARGIN);
@@ -455,11 +477,11 @@ fn select(sorted: &[Scored], p_none: f64, k: usize, s: &RouterSettings) -> (Vec<
     let mut out = Vec::new();
     let mut cum = 0.0;
     for (i, x) in sorted.iter().enumerate().take(k) {
-        out.push(i);
-        cum += x.p;
-        if cum >= s.cumulative {
+        if cum >= s.cumulative && !(compound && x.p >= COMPOUND_MIN_P) {
             break;
         }
+        out.push(i);
+        cum += x.p;
     }
     (out, false)
 }
@@ -753,7 +775,7 @@ mod tests {
     fn a_crowded_clear_winner_is_ranked_end_to_end() {
         let st = RouterSettings::default();
         let sorted = s(&[("a", 0.25), ("b", 0.025), ("c", 0.02)]);
-        let (selected, flat) = select(&sorted, 0.01, 5, &st);
+        let (selected, flat) = select(&sorted, 0.01, 5, false, &st);
         assert!(!flat, "a clear lead below flat_threshold is not flat");
         assert_eq!(selected[0], 0);
         assert_eq!(verdict(flat, 0.25, 0.025, 0.01, 0.9), Verdict::Ranked);
@@ -763,36 +785,51 @@ mod tests {
     fn cumulative_rule_stops_at_half() {
         let st = RouterSettings::default();
         let sorted = s(&[("a", 0.4), ("b", 0.2), ("c", 0.1)]);
-        assert_eq!(select(&sorted, 0.05, 5, &st), (vec![0, 1], false));
+        assert_eq!(select(&sorted, 0.05, 5, false, &st), (vec![0, 1], false));
     }
 
     #[test]
     fn confident_top_returns_one() {
         let st = RouterSettings::default();
         assert_eq!(
-            select(&s(&[("a", 0.9), ("b", 0.05)]), 0.01, 5, &st),
+            select(&s(&[("a", 0.9), ("b", 0.05)]), 0.01, 5, false, &st),
             (vec![0], false)
         );
+    }
+
+    #[test]
+    fn compound_extends_past_the_cutoff() {
+        let st = RouterSettings::default();
+        let sorted = s(&[("a", 0.8), ("b", 0.15), ("c", 0.03), ("d", 0.01)]);
+        assert_eq!(select(&sorted, 0.01, 5, false, &st), (vec![0], false));
+        assert_eq!(select(&sorted, 0.01, 5, true, &st), (vec![0, 1, 2], false));
+        assert_eq!(select(&sorted, 0.01, 2, true, &st), (vec![0, 1], false));
     }
 
     #[test]
     fn k_caps_selection() {
         let st = RouterSettings::default();
         let sorted = s(&[("a", 0.31), ("b", 0.1), ("c", 0.05), ("d", 0.04)]);
-        assert_eq!(select(&sorted, 0.0, 2, &st), (vec![0, 1], false));
+        assert_eq!(select(&sorted, 0.0, 2, false, &st), (vec![0, 1], false));
     }
 
     #[test]
     fn flat_returns_top_k_without_zero_padding() {
         let st = RouterSettings::default();
         let sorted = s(&[("a", 0.2), ("b", 0.15), ("c", 0.1), ("d", 0.05)]);
-        assert_eq!(select(&sorted, 0.1, 3, &st), (vec![0, 1, 2], true));
+        assert_eq!(select(&sorted, 0.1, 3, false, &st), (vec![0, 1, 2], true));
         assert_eq!(
-            select(&s(&[("a", 0.4), ("b", 0.1)]), 0.45, 5, &st),
+            select(&s(&[("a", 0.4), ("b", 0.1)]), 0.45, 5, false, &st),
             (vec![0, 1], true)
         );
         assert_eq!(
-            select(&s(&[("a", 0.25), ("b", 0.0), ("c", 0.0)]), 0.7, 5, &st),
+            select(
+                &s(&[("a", 0.25), ("b", 0.0), ("c", 0.0)]),
+                0.7,
+                5,
+                false,
+                &st
+            ),
             (vec![0], true)
         );
     }

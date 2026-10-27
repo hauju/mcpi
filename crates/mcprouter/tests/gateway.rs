@@ -50,7 +50,11 @@ async fn fake_systemone(Json(body): Json<Value>) -> Json<Value> {
                 );
             }
             "noul" => {
-                let p = if qid == "prose" { 0.1 } else { 0.9 };
+                let p = if qid == "prose" || qid == "compound" {
+                    0.1
+                } else {
+                    0.9
+                };
                 answers.insert(qid.clone(), json!({"type": "noul", "noul": p}));
             }
             _ => unreachable!(),
