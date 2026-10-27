@@ -28,6 +28,15 @@ axum = "0.8"
 # OpenSSL is needed, matching mcpclient.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 schemadiff = { path = "../schemadiff" }
+# Only for the eval example's hybrid arm: the hosted gateway's embedder, so the
+# eval shortlists with production's vectors. Never enabled by a library build.
+fastembed = { version = "7.5", default-features = false, features = [
+    "ort-download-binaries-rustls-tls",
+    "hf-hub-rustls-tls",
+], optional = true }
+
+[features]
+eval-embed = ["dep:fastembed"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

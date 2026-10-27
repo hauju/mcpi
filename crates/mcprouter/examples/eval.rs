@@ -9,7 +9,8 @@
 //! "is the model earning its place":
 //!
 //! * `bm25` — the lexical shortlist alone, no model, no API calls, free.
-//! * `jev`  — the shipping router: one choice plus three gate nouls.
+//! * `jev`  — the shipping router: one choice plus three gate nouls, over the
+//!   whole catalog, a BM25 shortlist, and the hybrid shortlist.
 //!
 //! If the arms tie on a catalog this size, the model is buying `p_none`, the
 //! flat signal and the verdict, not ranking — worth knowing before tuning
@@ -18,7 +19,12 @@
 //! ```sh
 //! cargo run -p mcprouter --example eval -- golden.json          # bm25 only
 //! TYPESAFE_API_KEY=… cargo run -p mcprouter --example eval -- golden.json
+//! TYPESAFE_API_KEY=… cargo run -p mcprouter --example eval --features eval-embed -- golden.json
 //! ```
+//!
+//! With a key, Jev runs over the whole catalog and then behind a BM25 shortlist
+//! of `EVAL_SHORTLIST` (default 50, the hosted gateway's size); `eval-embed`
+//! adds the hybrid shortlist with the hosted gateway's embedder.
 //!
 //! The golden file is `{ catalog: [{server, name, key, description,
 //! input_schema}], cases: [{request, expect: [key]}] }`. An empty `expect` is a
@@ -37,6 +43,9 @@ use serde::Deserialize;
 /// Tools returned per request. The router's own default, so the arms are scored
 /// on the same budget the gateway actually spends.
 const K: usize = 5;
+
+/// The hosted gateway's shortlist size (`SHORTLIST` in mcpi-site's gateway).
+const SHORTLIST: usize = 50;
 
 #[derive(Deserialize)]
 struct Golden {
@@ -224,24 +233,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     report("bm25 (no model)", &bm25, no_fit_cases);
 
-    // --- jev --------------------------------------------------------------
+    // --- jev ------------------------------------------------------------
     let Ok(api_key) = std::env::var(mcprouter::jev::API_KEY_ENV) else {
         println!(
-            "\n{} unset — skipping the model arm.",
+            "\n{} unset — skipping the model arms.",
             mcprouter::jev::API_KEY_ENV
         );
         return Ok(());
     };
-    let mut jev = Jev::new(api_key, mcprouter::jev::DEFAULT_MODEL)?;
-    if let Ok(base) = std::env::var(mcprouter::jev::BASE_URL_ENV) {
-        jev = jev.with_base_url(base);
+    let jev = || -> Result<Jev, mcprouter::jev::Error> {
+        let mut jev = Jev::new(api_key.clone(), mcprouter::jev::DEFAULT_MODEL)?;
+        if let Ok(base) = std::env::var(mcprouter::jev::BASE_URL_ENV) {
+            jev = jev.with_base_url(base);
+        }
+        Ok(jev)
+    };
+    let router = Router::new(jev()?, settings.clone(), &entries, None, Vec::new()).await;
+    run_router(
+        "jev, whole catalog",
+        &router,
+        &entries,
+        &golden.cases,
+        no_fit_cases,
+    )
+    .await?;
+
+    // --- shortlisted ------------------------------------------------------
+    // What the hosted gateway does with a catalog this size: Jev only ranks the
+    // shortlist, so a tool the shortlist drops can never be returned.
+    let mut shortlisted = settings.clone();
+    shortlisted.shortlist = match std::env::var("EVAL_SHORTLIST") {
+        Ok(n) => n.parse()?,
+        Err(_) => SHORTLIST,
+    };
+    if entries.len() <= shortlisted.shortlist {
+        println!(
+            "\n{} tools fit a shortlist of {} — skipping the shortlist arms.",
+            entries.len(),
+            shortlisted.shortlist
+        );
+        return Ok(());
     }
-    let router = Router::new(jev, settings.clone(), &entries, None, Vec::new()).await;
-    let mut model = Totals::default();
+    let router = Router::new(jev()?, shortlisted.clone(), &entries, None, Vec::new()).await;
+    let name = format!("jev, bm25 shortlist {}", shortlisted.shortlist);
+    run_router(&name, &router, &entries, &golden.cases, no_fit_cases).await?;
+
+    // Routing memory stays empty: the golden set has no history, and seeding it
+    // from other cases would leak their labels into this one.
+    #[cfg(feature = "eval-embed")]
+    {
+        let embedder: Arc<dyn mcprouter::Embedder> = Arc::new(embed::FastEmbedder::new()?);
+        let router = Router::new(
+            jev()?,
+            shortlisted.clone(),
+            &entries,
+            Some(embedder),
+            Vec::new(),
+        )
+        .await;
+        let name = format!("jev, hybrid shortlist {}", shortlisted.shortlist);
+        run_router(&name, &router, &entries, &golden.cases, no_fit_cases).await?;
+    }
+    #[cfg(not(feature = "eval-embed"))]
+    println!("\nbuilt without --features eval-embed — skipping the hybrid arm.");
+    Ok(())
+}
+
+/// Route every case through `router` and report it as one arm.
+async fn run_router(
+    name: &str,
+    router: &Router,
+    entries: &[Entry],
+    cases: &[Case],
+    no_fit_cases: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut totals = Totals::default();
     let mut tokens = 0u64;
     let mut latency = Vec::new();
-    for case in &golden.cases {
-        let routing = router.route(&entries, &case.request, Some(K)).await?;
+    println!();
+    for case in cases {
+        let routing = router.route(entries, &case.request, Some(K)).await?;
         tokens += routing.input_tokens;
         latency.push(routing.latency_ms);
         let ranked: Vec<String> = routing.candidates.iter().map(|c| c.key.clone()).collect();
@@ -258,9 +329,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 case.request, case.expect, returned, routing.verdict
             );
         }
-        accumulate(&mut model, case, &s, &returned);
+        accumulate(&mut totals, case, &s, &returned);
     }
-    report("jev (choice + gate nouls)", &model, no_fit_cases);
+    report(name, &totals, no_fit_cases);
     latency.sort_unstable();
     println!(
         "  cost             {:>5} input tokens total, {} ms median latency",
@@ -268,4 +339,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         latency[latency.len() / 2]
     );
     Ok(())
+}
+
+/// The hosted gateway's embedder — bge-small-en-v1.5 through `fastembed` — so the
+/// hybrid arm scores the same vectors production shortlists with.
+#[cfg(feature = "eval-embed")]
+mod embed {
+    use std::sync::Mutex;
+
+    use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
+    use mcprouter::{BoxFuture, EmbedError, Embedder};
+
+    pub struct FastEmbedder(Mutex<TextEmbedding>);
+
+    impl FastEmbedder {
+        pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+            let model = TextEmbedding::try_new(
+                TextInitOptions::new(EmbeddingModel::BGESmallENV15)
+                    .with_cache_dir(std::env::temp_dir().join("mcprouter-eval-fastembed"))
+                    .with_show_download_progress(false),
+            )?;
+            Ok(Self(Mutex::new(model)))
+        }
+    }
+
+    impl Embedder for FastEmbedder {
+        fn embed<'a>(
+            &'a self,
+            texts: &'a [String],
+        ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+            Box::pin(async move {
+                self.0
+                    .lock()
+                    .map_err(|_| EmbedError("the embedding model is poisoned".into()))?
+                    .embed(texts, None)
+                    .map_err(|e| EmbedError(e.to_string()))
+            })
+        }
+    }
 }
