@@ -1,0 +1,2927 @@
+{
+  "metadata": {
+    "provenance": "57 real tool definitions from local endpoint snapshots for servers found in local catalog events; 24 hand-written modelled tools on BlogCMS, StartupMarket and ProductDirectory. No customer call arguments or results.",
+    "labels": "Hand-labelled before evaluation. expect lists all required tools, not interchangeable alternatives. Missing arguments may require clarification; labels identify capabilities, not executable calls.",
+    "categories": {
+      "lexical": 16,
+      "zero_overlap": 12,
+      "cross_server": 14,
+      "no_fit": 8
+    },
+    "zero_overlap": "No alphanumeric token overlap with the expected tool name, key or full description; includes stopwords. Input schemas are not part of the evaluator ranking text.",
+    "limitations": "Constructed diagnostic set, not sampled production traffic. Category proportions do not estimate real-world frequencies. Modelled tools are illustrative, not claimed vendor contracts."
+  },
+  "catalog": [
+    {
+      "server": "Infrapage",
+      "name": "get_page_data",
+      "key": "Infrapage__get_page_data",
+      "description": "Fetch live data for every widget on a page you own, concurrently. Returns an array of { widget_id, label, kind, data }. Static kinds (links, badges) are included and resolve cheaply from config.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "page_id"
+        ],
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "description": "The page ID (MongoDB ObjectId hex)."
+          }
+        }
+      }
+    },
+    {
+      "server": "Infrapage",
+      "name": "get_weekly_recap",
+      "key": "Infrapage__get_weekly_recap",
+      "description": "The current weekly recap (week-over-week growth of public headline metrics) for a page you own. Returns null when nothing grew in the window.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "page_id"
+        ],
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "description": "The page ID (MongoDB ObjectId hex)."
+          }
+        }
+      }
+    },
+    {
+      "server": "Infrapage",
+      "name": "get_widget_data",
+      "key": "Infrapage__get_widget_data",
+      "description": "Fetch the current live data for one widget on a page you own. Kind, label, and credential are read from the stored widget — you cannot pass them, so no other user's integration secrets can be reached. Returns the widget's data JSON.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "page_id",
+          "widget_id"
+        ],
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "description": "The page ID (MongoDB ObjectId hex)."
+          },
+          "widget_id": {
+            "type": "string",
+            "description": "The widget ID (as listed by list_widgets)."
+          }
+        }
+      }
+    },
+    {
+      "server": "Infrapage",
+      "name": "get_widget_history",
+      "key": "Infrapage__get_widget_history",
+      "description": "Daily metric history for one widget on a page you own, newest first. 'days' defaults to 30, capped at 365. Each point has recorded_at, value, metric_kind, label, currency, and any chartable series.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "page_id",
+          "widget_id"
+        ],
+        "properties": {
+          "days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Days of history to return (default 30, capped at 365)."
+          },
+          "page_id": {
+            "type": "string",
+            "description": "The page ID (MongoDB ObjectId hex)."
+          },
+          "widget_id": {
+            "type": "string",
+            "description": "The widget ID (as listed by list_widgets)."
+          }
+        }
+      }
+    },
+    {
+      "server": "Infrapage",
+      "name": "list_pages",
+      "key": "Infrapage__list_pages",
+      "description": "List the pages owned by this account. Returns each page's id, title, slug, is_public flag, and widget count.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "server": "Infrapage",
+      "name": "list_widgets",
+      "key": "Infrapage__list_widgets",
+      "description": "List the widgets on a page you own: each widget's id, kind (variant name), label, and size. Never returns credential ids or config secrets.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "page_id"
+        ],
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "description": "The page ID (MongoDB ObjectId hex)."
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "create_changelog_entry",
+      "key": "SeggWat__create_changelog_entry",
+      "description": "Create a changelog entry on the project's public board changelog. 'title' is required; 'body' is Markdown. Optional 'version' (e.g. v1.4.0), 'category' (one of: added, improved, fixed, changed, removed, security), and 'component' (a slug from the project's component registry naming the product asset the entry belongs to, e.g. 'cli' or 'react-sdk' — keep 'version' a pure version and use 'component' for the asset instead of encoding it into the version string; an unknown slug errors listing the valid ones). By default the entry lands as a draft for review; set 'publish' to true to publish it to the public board immediately (published entries are included in the changelog email digest to subscribers). Optional 'published_at' (RFC 3339 or YYYY-MM-DD) backdates the display date — use it when importing existing changelog history. Returns the created entry.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "title"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "default": "",
+            "description": "Body text in Markdown"
+          },
+          "title": {
+            "type": "string",
+            "description": "Short headline (\"Dark mode\", \"Faster CSV exports\")"
+          },
+          "publish": {
+            "type": "boolean",
+            "default": false,
+            "description": "Publish to the public board immediately instead of leaving as a draft"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Optional version/tag shown as a badge (e.g. \"v1.4.0\")"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Optional category: added, improved, fixed, changed, removed, or security"
+          },
+          "component": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Optional component slug from the project's registry (e.g. \"cli\",\n\"react-sdk\") — which product asset this entry belongs to. An unknown\nslug errors with the valid slugs."
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Explicit display date (RFC 3339 or YYYY-MM-DD) — backdate entries when\nimporting existing changelog history. Defaults to the publish moment."
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "create_feedback",
+      "key": "SeggWat__create_feedback",
+      "description": "Create a new feedback item. Requires message (non-empty). Optional: type (Bug/Feature/Praise/Question/Improvement/Other), path, version, submitted_by.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "message"
+        ],
+        "properties": {
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "URL path where the feedback relates to"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Type of feedback: Bug, Feature, Praise, Question, Improvement, Other"
+          },
+          "message": {
+            "type": "string",
+            "description": "The feedback message text (cannot be empty)"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Application version to track feedback against specific releases"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "submitted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "User identifier who submitted the feedback"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "create_rating",
+      "key": "SeggWat__create_rating",
+      "description": "Create a new helpful rating (thumbs up/down). Requires value (true=helpful, false=not helpful). Optional: path, version, submitted_by. For star or NPS ratings, use create_typed_rating.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "value"
+        ],
+        "properties": {
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "URL path where the rating relates to"
+          },
+          "value": {
+            "type": "boolean",
+            "description": "Rating value - true for helpful, false for not helpful"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Application version to track ratings against specific releases"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "submitted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "User identifier who submitted the rating"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "create_survey",
+      "key": "SeggWat__create_survey",
+      "description": "Create a new survey from a canonical template. The 'template' must be one of: blank (empty starter), nps (Net Promoter Score), csat (customer satisfaction, 1-5), ces (customer effort, 1-7). The survey is created in 'draft' status — use set_survey_status to make it 'live'. Edit questions and triggers in the dashboard. Projects are capped at 10 non-archived surveys.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "template"
+        ],
+        "properties": {
+          "template": {
+            "type": "string",
+            "description": "Template to instantiate: blank, nps, csat, or ces"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "create_typed_rating",
+      "key": "SeggWat__create_typed_rating",
+      "description": "Create a typed rating. Supports three rating types:\n- helpful: value is 1 (helpful) or 0 (not helpful)\n- star: value is 1-5 (or 1-max_stars if specified)\n- nps: value is 0-10 (Net Promoter Score)\nRequired: project_id, rating_type, value. Optional: max_stars (for star type), path, version, submitted_by.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "rating_type",
+          "value"
+        ],
+        "properties": {
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "URL path where the rating relates to"
+          },
+          "value": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rating value (meaning depends on type):\n- helpful: true/false as 1/0\n- star: 1-5 (or 1-max_stars)\n- nps: 0-10"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Application version to track ratings against specific releases"
+          },
+          "max_stars": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint8",
+            "default": null,
+            "maximum": 255,
+            "minimum": 0,
+            "description": "Maximum stars (only for star type, defaults to 5)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "rating_type": {
+            "type": "string",
+            "description": "Rating type: helpful, star, or nps"
+          },
+          "submitted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "User identifier who submitted the rating"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "delete_feedback",
+      "key": "SeggWat__delete_feedback",
+      "description": "Delete a feedback item. This performs a soft-delete (archive) - the item is not permanently removed.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "feedback_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "feedback_id": {
+            "type": "string",
+            "description": "The feedback ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "delete_rating",
+      "key": "SeggWat__delete_rating",
+      "description": "Delete a rating item. This performs a soft-delete (archive) - the item is not permanently removed.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "rating_id"
+        ],
+        "properties": {
+          "rating_id": {
+            "type": "string",
+            "description": "The rating ID (MongoDB ObjectId)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "get_feedback",
+      "key": "SeggWat__get_feedback",
+      "description": "Get a single feedback item by its ID. Returns full feedback details including message, status, type, source, and metadata.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "feedback_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "feedback_id": {
+            "type": "string",
+            "description": "The feedback ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "get_idea",
+      "key": "SeggWat__get_idea",
+      "description": "Get a single idea (feature request) by its ID with full detail: title, description, status, votes (total and verified), comments count, public admin_response, completed_in_version, merged_into_id (set when the idea is a Duplicate), tag IDs, and the linked GitHub issue if any.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "idea_id"
+        ],
+        "properties": {
+          "idea_id": {
+            "type": "string",
+            "description": "The idea ID (MongoDB ObjectId)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "get_rating",
+      "key": "SeggWat__get_rating",
+      "description": "Get a single rating item by its ID. Returns full rating details including value, path, version, and metadata.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "rating_id"
+        ],
+        "properties": {
+          "rating_id": {
+            "type": "string",
+            "description": "The rating ID (MongoDB ObjectId)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "get_rating_stats",
+      "key": "SeggWat__get_rating_stats",
+      "description": "Get aggregated helpful rating statistics for a project. Returns total count, helpful count, not helpful count, and percentage. Optionally filter by path. For star or NPS stats, use get_typed_rating_stats.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Optional URL path to get stats for a specific page"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "get_survey",
+      "key": "SeggWat__get_survey",
+      "description": "Get a single survey by its ID, including the full definition: questions, trigger, thank-you action, status, and display mode.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "survey_id"
+        ],
+        "properties": {
+          "survey_id": {
+            "type": "string",
+            "description": "The survey ID (MongoDB ObjectId)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "get_survey_stats",
+      "key": "SeggWat__get_survey_stats",
+      "description": "Get aggregated response statistics for a survey, broken down per question (counts, averages, distributions, NPS bands where applicable).",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "survey_id"
+        ],
+        "properties": {
+          "survey_id": {
+            "type": "string",
+            "description": "The survey ID (MongoDB ObjectId)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "get_typed_rating_stats",
+      "key": "SeggWat__get_typed_rating_stats",
+      "description": "Get aggregated statistics for any rating type. Response varies by type:\n- helpful: total, helpful, not_helpful, percentage\n- star: total, average, distribution (counts per star value)\n- nps: total, score (-100 to 100), promoters, passives, detractors, distribution\nRequired: project_id. Optional: rating_type (defaults to helpful), path.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Optional URL path to get stats for a specific page"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "rating_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Rating type: helpful, star, or nps (defaults to helpful)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "list_changelog",
+      "key": "SeggWat__list_changelog",
+      "description": "List all changelog entries for a project (every status: draft, published, hidden), newest first. Each entry has a source (manual, github_release, completed_idea), title, Markdown body, optional version, category, and component (a slug naming the product asset, e.g. 'cli'), and lifecycle status. Optional 'component' narrows to one component slug. Call this before creating an entry to avoid duplicates.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "component": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Optional component slug to narrow the list (e.g. \"cli\", \"react-sdk\")"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "list_feedback",
+      "key": "SeggWat__list_feedback",
+      "description": "List feedback items for a project. Supports pagination (page, limit) and filtering by status (New/Active/Assigned/Hold/Closed/Resolved), type (Bug/Feature/Praise/Question/Improvement/Other), and search term.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Page number (1-indexed, defaults to 1)"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Filter by type: Bug, Feature, Praise, Question, Improvement, Other"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Number of items per page (1-100, defaults to 20)"
+          },
+          "search": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Search term to filter feedback by message content"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Filter by status: New, Active, Assigned, Hold, Closed, Resolved"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "list_ideas",
+      "key": "SeggWat__list_ideas",
+      "description": "List ideas (feature requests) for a project. Returns compact rows: id, title, status, votes_count, comments_count, completed_in_version, created_at, plus pagination. Optional 'status' filter (Pending, Open, Planned, Started, Completed, Declined, Duplicate, Rejected; omit for all), 'sort' ('votes' = most voted first, 'newest' = default), 'search' (title/description), 'page', 'limit' (1-100, default 20). The public roadmap is the Planned, Started and Completed ideas. Use get_idea for the description, admin response and linked GitHub issue.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Page number (1-indexed, defaults to 1)"
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Sort order: \"votes\" (most voted first) or \"newest\" (default)"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Number of items per page (1-100, defaults to 20)"
+          },
+          "search": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Search term matched against title and description"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Filter by status: Pending, Open, Planned, Started, Completed, Declined, Duplicate, Rejected (omit for all)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "list_projects",
+      "key": "SeggWat__list_projects",
+      "description": "List all projects for your organization. Returns project details including name, description, allowed origins, and feedback count.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "list_ratings",
+      "key": "SeggWat__list_ratings",
+      "description": "List ratings (thumbs up/down) for a project. Supports pagination (page, limit) and filtering by path and value (true=helpful, false=not helpful).",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Page number (1-indexed, defaults to 1)"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Filter by URL path"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Number of items per page (1-100, defaults to 20)"
+          },
+          "value": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null,
+            "description": "Filter by value (true for helpful, false for not helpful)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "list_surveys",
+      "key": "SeggWat__list_surveys",
+      "description": "List all surveys for a project. Returns each survey's full definition (questions, trigger, status, display mode) plus its response count. Survey statuses: draft, live, paused, archived.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "merge_ideas",
+      "key": "SeggWat__merge_ideas",
+      "description": "Merge a duplicate idea ('source_id') into the canonical idea to keep ('target_id'), both in the same project. Votes move to the target (a voter who backed both counts once), comments move with them, and the source becomes status Duplicate with merged_into_id pointing at the target; it stays visible on the public board as a merged duplicate. Cannot be undone through the API. The source must not already be a Duplicate, and the target must not itself be merged away. To merge several duplicates, call once per duplicate. Returns votes_migrated, votes_deduplicated and comments_migrated.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "source_id",
+          "target_id"
+        ],
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "description": "The duplicate idea to merge away (becomes Duplicate)"
+          },
+          "target_id": {
+            "type": "string",
+            "description": "The canonical idea to keep (receives the votes and comments)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "report_problem",
+      "key": "SeggWat__report_problem",
+      "description": "Report a bug, docs mismatch, friction or missing feature you hit while using this MCP server or the SeggWat API. The report goes to the SeggWat team, not to your projects. One report per distinct problem; keep working after filing. 'category' must be one of: bug, docs_mismatch, friction, feature_gap, quality_degradation, other. 'surface' is the MCP tool name or API path you were using.",
+      "input_schema": {
+        "type": "object",
+        "$defs": {
+          "ReportEvidenceInput": {
+            "type": "object",
+            "required": [
+              "type",
+              "content"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "One of: http_summary, stderr_excerpt, repro_steps, screenshot, log_excerpt, other"
+              },
+              "content": {
+                "type": "string",
+                "description": "The evidence itself, e.g. the error message or request/response summary"
+              }
+            },
+            "description": "One evidence item for a problem report"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "category",
+          "title",
+          "surface"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One-line summary of the problem (max 256 characters)"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "What happened versus what you expected (max 4096 characters)"
+          },
+          "surface": {
+            "type": "string",
+            "description": "What you were using: an MCP tool name (e.g. list_feedback) or an API path (e.g. GET /api/v1/projects)"
+          },
+          "category": {
+            "type": "string",
+            "description": "One of: bug, docs_mismatch, friction, feature_gap, quality_degradation, other"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ReportEvidenceInput"
+            },
+            "description": "Up to 10 evidence items (max 65536 bytes each)"
+          },
+          "severity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "One of: critical, high, medium, low (defaults to medium)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "set_changelog_status",
+      "key": "SeggWat__set_changelog_status",
+      "description": "Change a changelog entry's lifecycle status. 'status' must be one of: draft, published, hidden. 'published' puts the entry live on the public board changelog — this is the review gate for drafts from GitHub-release sync and completed ideas. 'draft' unpublishes; 'hidden' soft-hides without deleting. Publishing also makes the entry eligible for the subscriber email digest, and the first publish of an entry created from feedback emails the original submitter. Returns the updated entry.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "entry_id",
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "New status: draft, published, or hidden"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "The changelog entry ID (MongoDB ObjectId)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "set_survey_status",
+      "key": "SeggWat__set_survey_status",
+      "description": "Change a survey's lifecycle status. The 'status' must be one of: draft, live, paused, archived. Setting a survey to 'live' is what makes it fire from the widget. Returns the updated survey.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "survey_id",
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "New status: draft, live, paused, or archived"
+          },
+          "survey_id": {
+            "type": "string",
+            "description": "The survey ID (MongoDB ObjectId)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "setup_project",
+      "key": "SeggWat__setup_project",
+      "description": "Set up SeggWat feedback for a codebase in one call: creates the project, or returns the existing one with the same name, so it is safe to re-run. Returns the widget install snippet per framework (html, nextjs, nuxt) and the project key. Add exactly one snippet to the layout rendered on every page, then submit a test feedback through the widget and call verify_setup. Fails with a billing link when the organization has no active trial or has reached its plan's project limit.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Project name, usually the app or site name. An existing project with this name\n(case-insensitive) is returned instead of creating a duplicate."
+          },
+          "allowed_origins": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "default": null,
+            "description": "Origins allowed to load the widget, e.g. `[\"https://example.com\"]`. Pass the site's\nproduction origin(s); omitted allows every origin (`*`). Ignored for an existing project."
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "update_changelog_entry",
+      "key": "SeggWat__update_changelog_entry",
+      "description": "Update a changelog entry's content: title, Markdown body, version, category, component. Only the fields you pass change; omitted fields keep their current value (pass an empty string to clear 'version', 'category', or 'component'). Works on any entry regardless of status — use it to polish synced GitHub-release or completed-idea drafts before publishing. Returns the updated entry.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "entry_id"
+        ],
+        "properties": {
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "New Markdown body (omit to keep the current one)"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "New title (omit to keep the current one)"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "New version badge, e.g. \"v1.4.0\" (omit to keep the current one; pass \"\" to clear)"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "New category: added, improved, fixed, changed, removed, or security (omit to keep; pass \"\" to clear)"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "The changelog entry ID (MongoDB ObjectId)"
+          },
+          "component": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "New component slug from the project's registry (omit to keep; pass \"\" to clear)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "update_feedback",
+      "key": "SeggWat__update_feedback",
+      "description": "Update a feedback item. At least one field must be provided: message, type (Bug/Feature/Praise/Question/Improvement/Other), status (New/Active/Assigned/Hold/Closed/Resolved), or resolution_note. Setting status to Resolved emails the feedback submitter (when they left an email and the project has resolution emails enabled); a resolution_note is included in that email.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "feedback_id"
+        ],
+        "properties": {
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Updated type: Bug, Feature, Praise, Question, Improvement, Other"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Updated status: New, Active, Assigned, Hold, Closed, Resolved"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Updated feedback message content"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "feedback_id": {
+            "type": "string",
+            "description": "The feedback ID (MongoDB ObjectId)"
+          },
+          "resolution_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Optional note from the team when resolving feedback (included in resolution email to submitter)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "update_idea",
+      "key": "SeggWat__update_idea",
+      "description": "Update an idea (feature request). Provide at least one of: 'status' (Pending, Open, Planned, Started, Completed, Declined, Rejected — use merge_ideas for duplicates), 'completed_in_version' (e.g. v1.3.0; \"\" clears), 'admin_response' (public team reply shown on the board), 'title', 'description'. Omitted fields keep their value. Status changes are visible on the public board immediately: Planned/Started/Completed ideas form the public roadmap, Pending and Rejected are hidden. No emails are sent. The first time an idea moves to Completed, SeggWat auto-creates a DRAFT changelog entry for it (source completed_idea, once per idea — re-completing never duplicates it): title = idea title, body = admin_response if set, else the description, version = completed_in_version, component taken from an idea tag whose slug matches a changelog component. The draft is built from the values at that moment, so pass completed_in_version and admin_response in the same call as status Completed. The draft is never published automatically: review it with list_changelog / update_changelog_entry and publish with set_changelog_status. Returns the updated idea.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project_id",
+          "idea_id"
+        ],
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "New title"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "New status: Pending, Open, Planned, Started, Completed, Declined, Rejected (use merge_ideas for duplicates)"
+          },
+          "idea_id": {
+            "type": "string",
+            "description": "The idea ID (MongoDB ObjectId)"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID (MongoDB ObjectId)"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "New description"
+          },
+          "admin_response": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Public team response shown on the board next to the idea"
+          },
+          "completed_in_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Version the idea shipped in, e.g. \"v1.3.0\" (pass \"\" to clear)"
+          }
+        }
+      }
+    },
+    {
+      "server": "SeggWat",
+      "name": "verify_setup",
+      "key": "SeggWat__verify_setup",
+      "description": "Has this project received its first submission from a widget yet? `waiting` with a hint until it has, then `receiving` with the time of the first one.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`Setup.resource.id`."
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Only count events at or after this time. The agent passes the time it\ncalled `setup_*`, so a reused resource's old events do not verify a\nnew install."
+          }
+        }
+      }
+    },
+    {
+      "server": "Stepshots",
+      "name": "get_demo",
+      "key": "Stepshots__get_demo",
+      "description": "Get one demo in full: metadata, publish state, and every step with its screenshot URL and annotations.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "demo_id"
+        ],
+        "properties": {
+          "demo_id": {
+            "type": "string",
+            "description": "The demo ID (as shown by list_demos)"
+          }
+        }
+      }
+    },
+    {
+      "server": "Stepshots",
+      "name": "get_demo_analytics",
+      "key": "Stepshots__get_demo_analytics",
+      "description": "Get a demo's viewer analytics over a time window: total views, unique visitors, views per day, per-step completion rates (derive drop-off from these), and average time per step.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "demo_id"
+        ],
+        "properties": {
+          "days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "default": null,
+            "minimum": 0,
+            "description": "Time window in days (default: 28)"
+          },
+          "demo_id": {
+            "type": "string",
+            "description": "The demo ID (as shown by list_demos)"
+          }
+        }
+      }
+    },
+    {
+      "server": "Stepshots",
+      "name": "get_workspace_analytics",
+      "key": "Stepshots__get_workspace_analytics",
+      "description": "Get workspace-wide analytics over a time window: total views and visitors across all demos, plus per-demo performance — the dashboard overview as data.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "default": null,
+            "minimum": 0,
+            "description": "Time window in days (default: 28)"
+          }
+        }
+      }
+    },
+    {
+      "server": "Stepshots",
+      "name": "list_demos",
+      "key": "Stepshots__list_demos",
+      "description": "List your demos: id, title, step count, public/private state, view count, folder, and type. Start here to find demo IDs for the other tools.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      }
+    },
+    {
+      "server": "Stepshots",
+      "name": "list_tours",
+      "key": "Stepshots__list_tours",
+      "description": "List your guided tours: id, key, title, step count, and source. Tours are live overlays that run on the real app.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      }
+    },
+    {
+      "server": "Stepshots",
+      "name": "set_demo_public",
+      "key": "Stepshots__set_demo_public",
+      "description": "Publish or unpublish a demo. Publishing makes the share link and embeds publicly viewable; unpublishing hides them. Idempotent.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "demo_id",
+          "public"
+        ],
+        "properties": {
+          "public": {
+            "type": "boolean",
+            "description": "true to publish the demo (public share link + embeds), false to unpublish"
+          },
+          "demo_id": {
+            "type": "string",
+            "description": "The demo ID (as shown by list_demos)"
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "ack_triage",
+      "key": "Thermite__ack_triage",
+      "description": "Mark a claimed triage item done so it is not handed out again. Idempotent.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "notification_id"
+        ],
+        "properties": {
+          "notification_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "claim_triage",
+      "key": "Thermite__claim_triage",
+      "description": "Take issues off the triage queue. Claimed items are hidden from other agents until the lease expires, so the same issue is not diagnosed twice. Each item carries the release the error came from — check out that revision before reading the code. A regression also carries regressed_from_release, the release the fix was verified against: `git diff <regressed_from_release>..<release>` is the change set that reintroduced the bug. Call ack_triage when done.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "`new_issue` or `regression`."
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Only issues at this level, e.g. `error`."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Restrict to one project."
+          },
+          "lease_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "How long the claim holds before the work is offered to someone else. Default 900."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "create_project",
+      "key": "Thermite__create_project",
+      "description": "Create a project and return the DSN to configure an SDK with. The DSN's public key is not a secret — it only grants the ability to send events to this project.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "slug"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Display name. Defaults to the slug."
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL-safe identifier used in API paths: letters, digits, '-' and '_'."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "fix_record",
+      "key": "Thermite__fix_record",
+      "description": "What became of the fixes agents proposed: every analysis carrying a fix_url, graded against production, plus a per-agent tally. A fix is `held` when releases shipped after it was proposed and the issue was seen in none of them, `regressed` when the issue came back in a release that first appeared after it, and `pending` while nothing has shipped since. Read your own record here before trusting your own confidence.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Max fixes to return, newest first. Capped at 200."
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Restrict to one project. Omit for every project."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "get_event",
+      "key": "Thermite__get_event",
+      "description": "Fetch one event by the id the SDK assigned it, which is the id that appears in application logs.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "event_id"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "description": "The event id the SDK assigned, as it appears in application logs."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "get_issue",
+      "key": "Thermite__get_issue",
+      "description": "Everything needed to diagnose one issue in a single call: the exception chain, every stack frame with its source context, breadcrumbs, runtime contexts, and any analysis already posted by another agent. For a regression, regressed_from_release is the last known good — `git diff <regressed_from_release>..<latest release>` is the change set that reintroduced the bug.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "issue_id"
+        ],
+        "properties": {
+          "issue_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "list_issues",
+      "key": "Thermite__list_issues",
+      "description": "List issues in a project, each with a 24-hour sparkline. Sorted by most recent activity by default; pass sort=events for the highest-volume issues first, which is usually what you want when deciding what to fix, or sort=users for the issues hitting the most distinct users. Filter with environment=production or tag=key:value. Returns titles, culprits and counts — use get_issue for the stack trace.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "`key:value` — only issues with events carrying this tag, e.g. `server_name:web-3`\nor `component:worker` (events ingested through a labeled DSN key)."
+          },
+          "sort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "`events` for the highest-volume issues first, `users` for the most distinct users hit, `last_seen` (default) for the most recent."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "Max issues to return. Capped at 100."
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Case-insensitive substring match on the issue title."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "`unresolved`, `resolved` or `ignored`. Omit for all."
+          },
+          "project": {
+            "type": "string",
+            "description": "Project slug, as shown by `list_projects`."
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Only issues with events in this environment, e.g. `production`."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "list_monitors",
+      "key": "Thermite__list_monitors",
+      "description": "Cron monitors of a project: each scheduled job's schedule, last check-in and current status (ok, error, missed or timeout). A job that misses a run or overruns becomes an ordinary error event automatically; this answers \"are my scheduled jobs healthy\" before that happens. Monitors are created by the jobs themselves via Sentry check-ins, so an empty list means no job is instrumented.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project slug, as shown by `list_projects`."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "list_projects",
+      "key": "Thermite__list_projects",
+      "description": "List projects reporting errors to Thermite, with their unresolved issue count and events in the last 24 hours.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "pending_triage",
+      "key": "Thermite__pending_triage",
+      "description": "See which issues are waiting for triage without taking them. Use claim_triage to actually pick work up.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "`new_issue` or `regression`."
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Only issues at this level, e.g. `error`."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Restrict to one project."
+          },
+          "lease_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null,
+            "description": "How long the claim holds before the work is offered to someone else. Default 900."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "post_analysis",
+      "key": "Thermite__post_analysis",
+      "description": "Write a diagnosis back onto an issue so it is waiting for whoever opens it next. This is how triage work is preserved — without it the analysis is lost when the run ends. If you also opened a pull request for the fix, pass its URL as fix_url and it is shown alongside the diagnosis.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "issue_id",
+          "summary"
+        ],
+        "properties": {
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "The full reasoning."
+          },
+          "fix_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "The pull request you opened for this issue, if you got that far. Must be on the same host\nas the project's `repo_url`, which the triage item and `get_issue` both carry. Opening it\nis your job — thermite holds no git credential and never calls the host."
+          },
+          "release": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "The revision this was reasoned against, so a reader can tell if it is still current."
+          },
+          "summary": {
+            "type": "string",
+            "description": "One-line conclusion."
+          },
+          "issue_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "`high`, `medium` or `low`. Say low rather than guessing confidently."
+          },
+          "suggested_fix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "The concrete change to make."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "project_stats",
+      "key": "Thermite__project_stats",
+      "description": "Error rate over time plus the current state of a project: events per bucket by level, unresolved issues, new issues and regressions.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "window": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "`24h` (default), `7d` or `30d`."
+          },
+          "project": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "release_health",
+      "key": "Thermite__release_health",
+      "description": "Release health: how many sessions each recent release served and how many crashed, newest release first. Use this to tell a release that is broken from one that is merely busy — an error count alone cannot, because it rises with traffic. crash_free_rate is null below 50 sessions, where the rate would be noise. Requires an SDK with release health enabled; empty otherwise.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "window": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "`24h` (default), `7d` or `30d`."
+          },
+          "project": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "set_issue_status",
+      "key": "Thermite__set_issue_status",
+      "description": "Resolve, ignore or reopen an issue. Resolving is not final: a resolved issue that happens again is reopened and queued as a regression — pass in_next_release=true after fixing a bug whose fix has not shipped, so lingering traffic from already-seen releases does not reopen it. Ignoring is what suppresses an issue for good.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "issue_id",
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`resolved`, `ignored` or `unresolved`."
+          },
+          "issue_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "in_next_release": {
+            "type": "boolean",
+            "default": false,
+            "description": "With `resolved`: stay resolved for events from releases already seen (the broken deploy\nstill out there), and reopen as a regression only when a newer release reports the error.\nUse after fixing a bug whose fix has not shipped yet. Requires the SDK to send a release."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "setup_project",
+      "key": "Thermite__setup_project",
+      "description": "Set up error tracking for a codebase in one call: creates the project, or returns the existing one with the same slug, so it is safe to re-run. Returns the env var to write and the SDK init code per language. After adding it, trigger any error and call verify_setup until status is receiving.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "slug"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "Display name. Defaults to the slug."
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL-safe identifier used in API paths: letters, digits, '-' and '_'."
+          }
+        }
+      }
+    },
+    {
+      "server": "Thermite",
+      "name": "verify_setup",
+      "key": "Thermite__verify_setup",
+      "description": "Has this project received its first event yet? `waiting` with a hint until it has, then `receiving` with the first and last event times.",
+      "input_schema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "Project slug, as shown by `list_projects`."
+          }
+        }
+      }
+    },
+    {
+      "server": "BlogCMS",
+      "name": "create_post",
+      "key": "BlogCMS__create_post",
+      "description": "Create a blog article as an unpublished draft with a title, Markdown body, and optional tags. Publishing is a separate action.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Article headline"
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown content"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "body"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "BlogCMS",
+      "name": "list_posts",
+      "key": "BlogCMS__list_posts",
+      "description": "List blog articles with pagination. Filter by draft or published status and author; returns titles, slugs and publication dates.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published"
+            ]
+          },
+          "author_id": {
+            "type": "string",
+            "description": "Author ID"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number",
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Page size",
+            "minimum": 1
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "BlogCMS",
+      "name": "search_posts",
+      "key": "BlogCMS__search_posts",
+      "description": "Search blog article titles and body text for a phrase. Returns matching excerpts and article IDs, including unpublished drafts.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Text to search"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum results",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "BlogCMS",
+      "name": "get_post",
+      "key": "BlogCMS__get_post",
+      "description": "Read one blog article with its complete Markdown body, tags, author and publication status.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Article ID"
+          }
+        },
+        "required": [
+          "post_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "BlogCMS",
+      "name": "update_post",
+      "key": "BlogCMS__update_post",
+      "description": "Edit the title or Markdown body of an existing blog article. Omitted fields keep their current value.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Article ID"
+          },
+          "title": {
+            "type": "string",
+            "description": "Replacement title"
+          },
+          "body": {
+            "type": "string",
+            "description": "Replacement content"
+          }
+        },
+        "required": [
+          "post_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "BlogCMS",
+      "name": "publish_post",
+      "key": "BlogCMS__publish_post",
+      "description": "Publish a draft blog article immediately or schedule it for a future timestamp. Returns the public article URL.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Draft article ID"
+          },
+          "publish_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "post_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "BlogCMS",
+      "name": "list_comments",
+      "key": "BlogCMS__list_comments",
+      "description": "List reader comments on a blog article, optionally filtering by moderation status.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Article ID"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "spam"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "post_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "BlogCMS",
+      "name": "create_comment",
+      "key": "BlogCMS__create_comment",
+      "description": "Add a reader comment to a blog article. Comments enter the moderation queue before becoming visible.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "description": "Article ID"
+          },
+          "body": {
+            "type": "string",
+            "description": "Comment text"
+          },
+          "author_name": {
+            "type": "string",
+            "description": "Display name"
+          }
+        },
+        "required": [
+          "post_id",
+          "body",
+          "author_name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "StartupMarket",
+      "name": "create_listing",
+      "key": "StartupMarket__create_listing",
+      "description": "Create a draft listing to sell a startup or online business. Include asking price in USD, monthly revenue and a description of the business.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Business name"
+          },
+          "description": {
+            "type": "string",
+            "description": "Business overview"
+          },
+          "asking_price_usd": {
+            "type": "integer",
+            "description": "Asking price",
+            "minimum": 0
+          },
+          "monthly_revenue_usd": {
+            "type": "integer",
+            "description": "Monthly revenue",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "asking_price_usd",
+          "monthly_revenue_usd"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "StartupMarket",
+      "name": "list_listings",
+      "key": "StartupMarket__list_listings",
+      "description": "List startup acquisition listings with pagination. Filter by business category and maximum asking price in USD.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "saas",
+              "ecommerce",
+              "content",
+              "mobile"
+            ]
+          },
+          "max_price_usd": {
+            "type": "integer",
+            "description": "Price ceiling",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number",
+            "minimum": 1
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "StartupMarket",
+      "name": "search_listings",
+      "key": "StartupMarket__search_listings",
+      "description": "Search businesses for sale by keyword, revenue range and asking price. Returns acquisition opportunities matching the filters.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Business keyword"
+          },
+          "min_monthly_revenue_usd": {
+            "type": "integer",
+            "description": "Minimum revenue",
+            "minimum": 0
+          },
+          "max_price_usd": {
+            "type": "integer",
+            "description": "Price ceiling",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "StartupMarket",
+      "name": "get_listing",
+      "key": "StartupMarket__get_listing",
+      "description": "Get one startup sale listing with asking price, revenue, profit, traffic and seller notes.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Acquisition listing ID"
+          }
+        },
+        "required": [
+          "listing_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "StartupMarket",
+      "name": "update_listing",
+      "key": "StartupMarket__update_listing",
+      "description": "Update an owned startup sale listing: asking price, monthly revenue or business description.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Acquisition listing ID"
+          },
+          "asking_price_usd": {
+            "type": "integer",
+            "description": "New price",
+            "minimum": 0
+          },
+          "monthly_revenue_usd": {
+            "type": "integer",
+            "description": "New revenue",
+            "minimum": 0
+          },
+          "description": {
+            "type": "string",
+            "description": "Business overview"
+          }
+        },
+        "required": [
+          "listing_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "StartupMarket",
+      "name": "create_inquiry",
+      "key": "StartupMarket__create_inquiry",
+      "description": "Send a private acquisition inquiry to the seller of a startup listing. Include your question and an optional proposed offer in USD.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Acquisition listing ID"
+          },
+          "message": {
+            "type": "string",
+            "description": "Buyer message"
+          },
+          "offer_usd": {
+            "type": "integer",
+            "description": "Proposed offer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "listing_id",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "StartupMarket",
+      "name": "list_favorites",
+      "key": "StartupMarket__list_favorites",
+      "description": "List businesses for sale saved to your acquisition watchlist, with current prices and listing availability.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "description": "Page number",
+            "minimum": 1
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "StartupMarket",
+      "name": "save_listing",
+      "key": "StartupMarket__save_listing",
+      "description": "Add or remove a startup sale listing from your private acquisition watchlist.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Acquisition listing ID"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "listing_id",
+          "saved"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "ProductDirectory",
+      "name": "create_listing",
+      "key": "ProductDirectory__create_listing",
+      "description": "Submit a software product to the discovery directory. Provide its name, homepage, tagline and category. New submissions await moderation.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Product name"
+          },
+          "homepage": {
+            "type": "string",
+            "format": "uri"
+          },
+          "tagline": {
+            "type": "string",
+            "description": "Short product pitch"
+          },
+          "category": {
+            "type": "string",
+            "description": "Directory category"
+          }
+        },
+        "required": [
+          "name",
+          "homepage",
+          "tagline",
+          "category"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "ProductDirectory",
+      "name": "list_listings",
+      "key": "ProductDirectory__list_listings",
+      "description": "Browse software products in the directory by category, newest additions or popularity. Returns product names, taglines and homepages.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "Directory category"
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "newest",
+              "popular"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number",
+            "minimum": 1
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "ProductDirectory",
+      "name": "search_listings",
+      "key": "ProductDirectory__search_listings",
+      "description": "Search the software discovery directory by product name or description. Filter by category or free pricing.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Product search phrase"
+          },
+          "category": {
+            "type": "string",
+            "description": "Directory category"
+          },
+          "free_only": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "ProductDirectory",
+      "name": "get_listing",
+      "key": "ProductDirectory__get_listing",
+      "description": "Get one software directory product with description, homepage, pricing model, categories and review summary.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Directory product ID"
+          }
+        },
+        "required": [
+          "listing_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "ProductDirectory",
+      "name": "update_listing",
+      "key": "ProductDirectory__update_listing",
+      "description": "Edit an owned software directory product: tagline, description, homepage or pricing model. Does not change customer reviews.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Directory product ID"
+          },
+          "tagline": {
+            "type": "string",
+            "description": "Short pitch"
+          },
+          "description": {
+            "type": "string",
+            "description": "Full description"
+          },
+          "homepage": {
+            "type": "string",
+            "format": "uri"
+          },
+          "pricing": {
+            "type": "string",
+            "enum": [
+              "free",
+              "freemium",
+              "paid"
+            ]
+          }
+        },
+        "required": [
+          "listing_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "ProductDirectory",
+      "name": "create_review",
+      "key": "ProductDirectory__create_review",
+      "description": "Write a public software product review in the directory with a one-to-five star score and review text.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Directory product ID"
+          },
+          "stars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "body": {
+            "type": "string",
+            "description": "Review text"
+          }
+        },
+        "required": [
+          "listing_id",
+          "stars",
+          "body"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "ProductDirectory",
+      "name": "list_reviews",
+      "key": "ProductDirectory__list_reviews",
+      "description": "List public customer reviews for a software directory product, sorted by newest or highest star score.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "description": "Directory product ID"
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "newest",
+              "highest"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "listing_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "server": "ProductDirectory",
+      "name": "list_categories",
+      "key": "ProductDirectory__list_categories",
+      "description": "List all software discovery categories with their slugs, descriptions and product counts.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "cases": [
+    {
+      "category": "lexical",
+      "request": "List feedback items with status New and type Bug.",
+      "expect": [
+        "SeggWat__list_feedback"
+      ],
+      "rationale": "Filter the feedback inbox, not runtime exceptions."
+    },
+    {
+      "category": "lexical",
+      "request": "Create a survey using the csat template.",
+      "expect": [
+        "SeggWat__create_survey"
+      ],
+      "rationale": "Create a survey definition rather than submit a rating."
+    },
+    {
+      "category": "lexical",
+      "request": "Get helpful rating statistics filtered by path /docs.",
+      "expect": [
+        "SeggWat__get_rating_stats"
+      ],
+      "rationale": "The dedicated helpful-rating aggregate."
+    },
+    {
+      "category": "lexical",
+      "request": "Create a typed NPS rating with value 9.",
+      "expect": [
+        "SeggWat__create_typed_rating"
+      ],
+      "rationale": "The boolean helpful rating tool cannot represent NPS."
+    },
+    {
+      "category": "lexical",
+      "request": "List changelog entries for the cli component.",
+      "expect": [
+        "SeggWat__list_changelog"
+      ],
+      "rationale": "Read release announcements rather than publish one."
+    },
+    {
+      "category": "lexical",
+      "request": "Get release health including crash-free sessions.",
+      "expect": [
+        "Thermite__release_health"
+      ],
+      "rationale": "Session denominators distinguish this from raw error counts."
+    },
+    {
+      "category": "lexical",
+      "request": "Get the error event whose SDK event ID is evt-42.",
+      "expect": [
+        "Thermite__get_event"
+      ],
+      "rationale": "An individual SDK occurrence rather than an aggregated issue."
+    },
+    {
+      "category": "lexical",
+      "request": "List issues in production sorted by users.",
+      "expect": [
+        "Thermite__list_issues"
+      ],
+      "rationale": "Issue discovery by affected-user count."
+    },
+    {
+      "category": "lexical",
+      "request": "List my Stepshots guided tours.",
+      "expect": [
+        "Stepshots__list_tours"
+      ],
+      "rationale": "Live overlays differ from screenshot demos."
+    },
+    {
+      "category": "lexical",
+      "request": "Get demo demo-42 with all screenshots and annotations.",
+      "expect": [
+        "Stepshots__get_demo"
+      ],
+      "rationale": "Read a known demo rather than list summaries."
+    },
+    {
+      "category": "lexical",
+      "request": "List the widgets on page page-42.",
+      "expect": [
+        "Infrapage__list_widgets"
+      ],
+      "rationale": "Widget definitions rather than fetched metric values."
+    },
+    {
+      "category": "lexical",
+      "request": "Fetch live data for every widget on my page.",
+      "expect": [
+        "Infrapage__get_page_data"
+      ],
+      "rationale": "Page-wide fetch rather than one widget."
+    },
+    {
+      "category": "lexical",
+      "request": "Search blog article titles and body text for OAuth.",
+      "expect": [
+        "BlogCMS__search_posts"
+      ],
+      "rationale": "Search article content rather than software products."
+    },
+    {
+      "category": "lexical",
+      "request": "Publish blog article post-42 tomorrow at 09:00 UTC.",
+      "expect": [
+        "BlogCMS__publish_post"
+      ],
+      "rationale": "Schedule publication of an existing draft."
+    },
+    {
+      "category": "lexical",
+      "request": "List businesses saved to my acquisition watchlist.",
+      "expect": [
+        "StartupMarket__list_favorites"
+      ],
+      "rationale": "Read saved acquisition targets."
+    },
+    {
+      "category": "lexical",
+      "request": "List public reviews for software directory product app-42.",
+      "expect": [
+        "ProductDirectory__list_reviews"
+      ],
+      "rationale": "Read directory reviews rather than private feedback."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Explain why checkout crashed.",
+      "expect": [
+        "Thermite__get_issue"
+      ],
+      "rationale": "Diagnosing a crash requires exception details and stack frames."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Silence recurring crashes forever.",
+      "expect": [
+        "Thermite__set_issue_status"
+      ],
+      "rationale": "Ignoring suppresses recurrence; resolving allows reopening."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Did overnight backups execute punctually?",
+      "expect": [
+        "Thermite__list_monitors"
+      ],
+      "rationale": "Scheduled-job check-ins expose missed or late runs."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Where do tutorial viewers abandon onboarding?",
+      "expect": [
+        "Stepshots__get_demo_analytics"
+      ],
+      "rationale": "Per-step completion rates reveal walkthrough abandonment."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Which dashboard numbers improved since Monday?",
+      "expect": [
+        "Infrapage__get_weekly_recap"
+      ],
+      "rationale": "Week-over-week metric growth is the requested recap."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Consolidate redundant suggestions.",
+      "expect": [
+        "SeggWat__merge_ideas"
+      ],
+      "rationale": "Combining duplicate feature requests preserves votes and comments."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Measure customer advocacy.",
+      "expect": [
+        "SeggWat__get_typed_rating_stats"
+      ],
+      "rationale": "NPS aggregates quantify willingness to recommend."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Stop collecting questionnaire answers temporarily.",
+      "expect": [
+        "SeggWat__set_survey_status"
+      ],
+      "rationale": "Pausing the survey stops responses without archiving it."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Log somebody's complaint.",
+      "expect": [
+        "SeggWat__create_feedback"
+      ],
+      "rationale": "Store unsolicited user feedback rather than a machine exception."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Let outsiders watch walkthroughs.",
+      "expect": [
+        "Stepshots__set_demo_public"
+      ],
+      "rationale": "Public sharing makes a recorded demo accessible."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Reserve debugging assignments exclusively.",
+      "expect": [
+        "Thermite__claim_triage"
+      ],
+      "rationale": "Claiming issue work prevents competing agents taking it."
+    },
+    {
+      "category": "zero_overlap",
+      "request": "Plot yesterday versus February.",
+      "expect": [
+        "Infrapage__get_widget_history"
+      ],
+      "rationale": "Historical dashboard measurements support a time comparison; identifiers may need clarification."
+    },
+    {
+      "category": "cross_server",
+      "request": "List projects that report runtime errors, not customer feedback.",
+      "expect": [
+        "Thermite__list_projects"
+      ],
+      "rationale": "Same list_projects name on two real servers; domain disambiguates."
+    },
+    {
+      "category": "cross_server",
+      "request": "List projects with feedback counts and allowed origins.",
+      "expect": [
+        "SeggWat__list_projects"
+      ],
+      "rationale": "Feedback project metadata rather than exception counters."
+    },
+    {
+      "category": "cross_server",
+      "request": "Set up error tracking for this codebase.",
+      "expect": [
+        "Thermite__setup_project"
+      ],
+      "rationale": "Shared setup_project name; errors identify the integration."
+    },
+    {
+      "category": "cross_server",
+      "request": "Set up a feedback widget for this codebase.",
+      "expect": [
+        "SeggWat__setup_project"
+      ],
+      "rationale": "Shared setup_project name; feedback identifies the integration."
+    },
+    {
+      "category": "cross_server",
+      "request": "Verify that our SDK has received its first error event.",
+      "expect": [
+        "Thermite__verify_setup"
+      ],
+      "rationale": "Distinguish first SDK event from first feedback submission."
+    },
+    {
+      "category": "cross_server",
+      "request": "Verify that our widget has received its first submission.",
+      "expect": [
+        "SeggWat__verify_setup"
+      ],
+      "rationale": "Distinguish feedback widget installation from SDK installation."
+    },
+    {
+      "category": "cross_server",
+      "request": "Create a listing to sell my SaaS business for 50000 USD.",
+      "expect": [
+        "StartupMarket__create_listing"
+      ],
+      "rationale": "A business acquisition listing, not a software discovery submission."
+    },
+    {
+      "category": "cross_server",
+      "request": "Create a listing so people can discover my software and visit its homepage.",
+      "expect": [
+        "ProductDirectory__create_listing"
+      ],
+      "rationale": "A directory submission rather than an offer to sell the business."
+    },
+    {
+      "category": "cross_server",
+      "request": "Search listings for email software I can use for free.",
+      "expect": [
+        "ProductDirectory__search_listings"
+      ],
+      "rationale": "Find software to use, not an entire business to purchase."
+    },
+    {
+      "category": "cross_server",
+      "request": "Search listings for an email SaaS business I can acquire under 100000 USD.",
+      "expect": [
+        "StartupMarket__search_listings"
+      ],
+      "rationale": "Acquisition intent distinguishes the identical search tool names."
+    },
+    {
+      "category": "cross_server",
+      "request": "Update listing sale-42 to reduce the asking price to 25000 USD.",
+      "expect": [
+        "StartupMarket__update_listing"
+      ],
+      "rationale": "Change an acquisition price rather than a software pricing model."
+    },
+    {
+      "category": "cross_server",
+      "request": "Create a draft blog article and a draft public-board changelog entry about version 2.",
+      "expect": [
+        "BlogCMS__create_post",
+        "SeggWat__create_changelog_entry"
+      ],
+      "rationale": "Both separately requested content artifacts are required."
+    },
+    {
+      "category": "cross_server",
+      "request": "Get aggregate helpful ratings for our docs and public directory reviews of our product.",
+      "expect": [
+        "SeggWat__get_rating_stats",
+        "ProductDirectory__list_reviews"
+      ],
+      "rationale": "Two distinct sources of customer opinion are explicitly requested."
+    },
+    {
+      "category": "cross_server",
+      "request": "List my recorded demos and my live guided tours.",
+      "expect": [
+        "Stepshots__list_demos",
+        "Stepshots__list_tours"
+      ],
+      "rationale": "Similar content types require both enumeration tools."
+    },
+    {
+      "category": "no_fit",
+      "request": "What is 17 times 23? Answer directly.",
+      "expect": [],
+      "rationale": "Arithmetic requires no connected tool."
+    },
+    {
+      "category": "no_fit",
+      "request": "Rewrite this sentence politely: You broke the build.",
+      "expect": [],
+      "rationale": "The supplied text can be rewritten without external data."
+    },
+    {
+      "category": "no_fit",
+      "request": "Explain the difference between a blog post and a changelog. Do not access my accounts.",
+      "expect": [],
+      "rationale": "Mentions catalog vocabulary but asks for a conceptual answer."
+    },
+    {
+      "category": "no_fit",
+      "request": "Search my email inbox for the invoice from yesterday.",
+      "expect": [],
+      "rationale": "No mail server exists in this catalog."
+    },
+    {
+      "category": "no_fit",
+      "request": "Create a calendar event for our product launch tomorrow.",
+      "expect": [],
+      "rationale": "No calendar write capability exists."
+    },
+    {
+      "category": "no_fit",
+      "request": "Refund the customer payment for order order-42.",
+      "expect": [],
+      "rationale": "No payment or refund tool exists."
+    },
+    {
+      "category": "no_fit",
+      "request": "Record a new browser demo by clicking through my app.",
+      "expect": [],
+      "rationale": "The recorded-demo server can read and publish, but cannot record a new demo."
+    },
+    {
+      "category": "no_fit",
+      "request": "Delete the production database and all backups.",
+      "expect": [],
+      "rationale": "No database administration or backup deletion tool exists."
+    }
+  ]
+}
