@@ -100,6 +100,45 @@ impl StreamableHttpClient for Bounded {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, Error> {
+        self.post(
+            uri,
+            message,
+            session_id,
+            auth_token,
+            custom_headers,
+            MAX_BODY,
+        )
+        .await
+    }
+
+    async fn post_message_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<StreamableHttpPostResponse, Error> {
+        let cap = max_sse_event_size.min(MAX_BODY);
+        self.post(uri, message, session_id, auth_token, custom_headers, cap)
+            .await
+    }
+}
+
+impl Bounded {
+    /// rmcp's `post_message`, with an SSE response capped at `sse_cap` bytes
+    /// in total. A total is stricter than rmcp's per-event limit, and is what
+    /// keeps one response from streaming without end.
+    async fn post(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        sse_cap: usize,
+    ) -> Result<StreamableHttpPostResponse, Error> {
         let mut request = self
             .0
             .post(uri.as_ref())
@@ -214,8 +253,8 @@ impl StreamableHttpClient for Bounded {
                 let bytes = response.bytes_stream().map(move |chunk| {
                     let chunk = chunk.map_err(std::io::Error::other)?;
                     read += chunk.len();
-                    if read > MAX_BODY {
-                        return Err(std::io::Error::other(too_large()));
+                    if read > sse_cap {
+                        return Err(std::io::Error::other(too_large(sse_cap)));
                     }
                     Ok(chunk)
                 });
@@ -262,13 +301,13 @@ async fn read_capped(
 ) -> Result<Vec<u8>, Error> {
     let declared = response.content_length().unwrap_or(0);
     if overflow == Overflow::Refuse && declared > max as u64 {
-        return Err(too_large());
+        return Err(too_large(max));
     }
     let mut body = Vec::with_capacity((declared as usize).min(max));
     while let Some(chunk) = response.chunk().await? {
         if body.len() + chunk.len() > max {
             if overflow == Overflow::Refuse {
-                return Err(too_large());
+                return Err(too_large(max));
             }
             body.extend_from_slice(&chunk[..max - body.len()]);
             break;
@@ -278,10 +317,10 @@ async fn read_capped(
     Ok(body)
 }
 
-fn too_large() -> Error {
+fn too_large(max: usize) -> Error {
     StreamableHttpError::UnexpectedServerResponse(Cow::Owned(format!(
-        "the server's response is larger than {} MiB",
-        MAX_BODY / (1024 * 1024)
+        "the server's response is larger than {} KiB",
+        max / 1024
     )))
 }
 
@@ -300,11 +339,13 @@ fn is_reserved(name: &HeaderName) -> bool {
 fn scope_of(header: &str) -> Option<String> {
     let start = header.to_ascii_lowercase().find("scope=")? + "scope=".len();
     let value = &header[start..];
-    let scope = match value.strip_prefix('"') {
-        Some(quoted) => &quoted[..quoted.find('"')?],
-        None => value.split([',', ' ']).next().unwrap_or(value),
-    };
-    (!scope.is_empty()).then(|| scope.to_string())
+    if let Some(quoted) = value.strip_prefix('"') {
+        return quoted.find('"').map(|end| quoted[..end].to_string());
+    }
+    let end = value
+        .find(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .unwrap_or(value.len());
+    (end > 0).then(|| value[..end].to_string())
 }
 
 /// HTTP 429 and 5xx as body-free metadata, as rmcp's backend reports them.
@@ -495,6 +536,8 @@ mod tests {
             scope_of("Bearer scope=read:data, x=y").as_deref(),
             Some("read:data")
         );
+        assert_eq!(scope_of("Bearer scope=a\tb").as_deref(), Some("a"));
+        assert_eq!(scope_of("Bearer scope=a;b").as_deref(), Some("a"));
         assert_eq!(scope_of("Bearer realm=x"), None);
     }
 
