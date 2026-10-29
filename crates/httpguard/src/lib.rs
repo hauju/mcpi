@@ -95,17 +95,32 @@ pub fn client_builder() -> reqwest::ClientBuilder {
         .no_proxy()
         .dns_resolver(Arc::new(PublicDns))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            let same_host =
-                attempt.previous().first().and_then(url::Url::host_str) == attempt.url().host_str();
-            if attempt.previous().len() >= 5
-                || !same_host
-                || validate_url(attempt.url().as_str()).is_err()
+            if redirect_allowed(attempt.previous(), attempt.url())
+                && validate_url(attempt.url().as_str()).is_ok()
             {
-                attempt.stop()
-            } else {
                 attempt.follow()
+            } else {
+                attempt.stop()
             }
         }))
+}
+
+/// Whether a redirect to `next` may be followed after the hops in `previous`
+/// (the first being the URL the caller named).
+///
+/// Five hops at most, http(s) only, on the named host, and never back down to
+/// `http` once a hop was `https`. reqwest strips `Authorization` on a host
+/// change but keeps every other header, so a same-host `307` to plain `http`
+/// would send a pasted `X-API-Key` and the request body in the clear.
+pub fn redirect_allowed(previous: &[url::Url], next: &url::Url) -> bool {
+    let Some(named) = previous.first() else {
+        return false;
+    };
+    let downgrade = next.scheme() == "http" && previous.iter().any(|u| u.scheme() == "https");
+    previous.len() < 5
+        && matches!(next.scheme(), "http" | "https")
+        && named.host_str().is_some_and(|h| next.host_str() == Some(h))
+        && !downgrade
 }
 
 #[derive(Clone)]
@@ -206,6 +221,24 @@ mod tests {
         ] {
             assert!(validate_url(url).is_err());
         }
+    }
+    #[test]
+    fn redirects_stay_on_the_host_and_never_drop_tls() {
+        let u = |s: &str| url::Url::parse(s).unwrap();
+        let allowed = |prev: &[&str], next: &str| {
+            let prev: Vec<_> = prev.iter().map(|p| u(p)).collect();
+            redirect_allowed(&prev, &u(next))
+        };
+        assert!(allowed(&["https://a.com/mcp"], "https://a.com/mcp/"));
+        assert!(allowed(&["http://a.com/mcp"], "https://a.com/mcp"));
+        assert!(!allowed(&["https://a.com/mcp"], "http://a.com/mcp"));
+        assert!(!allowed(
+            &["http://a.com", "https://a.com"],
+            "http://a.com/x"
+        ));
+        assert!(!allowed(&["https://a.com/mcp"], "https://b.com/mcp"));
+        assert!(!allowed(&["https://a.com/mcp"], "ftp://a.com/mcp"));
+        assert!(!allowed(&["https://a.com/1"; 5], "https://a.com/6"));
     }
     #[tokio::test]
     async fn refuses_localhost_at_connection_time_and_literal_metadata() {
