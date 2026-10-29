@@ -14,7 +14,7 @@ use rmcp::service::{
     ClientInitializeError, NotificationContext, QuitReason, RoleClient, RunningService,
 };
 use rmcp::transport::streamable_http_client::{
-    AuthRequiredError, StreamableHttpClientTransportConfig,
+    AuthRequiredError, StreamableHttpClient, StreamableHttpClientTransportConfig,
 };
 use rmcp::transport::{
     AuthClient, AuthorizationManager, StreamableHttpClientTransport, TokioChildProcess,
@@ -24,6 +24,7 @@ use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
+use crate::bounded::Bounded;
 use crate::wire::Recording;
 use crate::{Error, Result, Transport, oauth, pathenv, snapshot};
 
@@ -211,8 +212,15 @@ pub(crate) async fn spawn(
             headers,
             credential_key,
         } => {
-            let transport =
-                build_http(url, headers, credential_key.as_deref(), local_client()?).await?;
+            let client = local_client()?;
+            let transport = build_http(
+                url,
+                headers,
+                credential_key.as_deref(),
+                client.clone(),
+                client,
+            )
+            .await?;
             handler
                 .serve(Recording::new(transport, events.clone()))
                 .await
@@ -235,7 +243,7 @@ pub(crate) async fn spawn_public(
 ) -> Result<Arc<ServerPeerInfo>> {
     httpguard::validate_url(url).map_err(|e| Error::Connect(e.to_string()))?;
     let transport = StreamableHttpClientTransport::with_client(
-        public_client()?,
+        Bounded(public_client()?),
         StreamableHttpClientTransportConfig::with_uri(url),
     );
     let handler = Forwarder {
@@ -267,7 +275,8 @@ pub(crate) async fn spawn_public_with_headers(
     events: broadcast::Sender<Event>,
 ) -> Result<Arc<ServerPeerInfo>> {
     httpguard::validate_url(url).map_err(|e| Error::Connect(e.to_string()))?;
-    let transport = build_http(url, headers, None, public_client()?).await?;
+    let client = public_client()?;
+    let transport = build_http(url, headers, None, client.clone(), Bounded(client)).await?;
     let handler = Forwarder {
         events: events.clone(),
     };
@@ -431,12 +440,17 @@ fn drain_stderr(
 /// a server that needs none is unaffected, and one that does answers with a 401
 /// carrying the challenge that drives sign-in. One code path, and token refresh
 /// on a rejected token comes for free.
-async fn build_http(
+///
+/// `client` is what the authorization manager's discovery requests go through;
+/// `transport` carries the MCP traffic itself — the same client, or for a
+/// hosted caller the same client behind [`Bounded`].
+async fn build_http<C: StreamableHttpClient + Send + Sync>(
     url: &str,
     headers: &std::collections::BTreeMap<String, String>,
     credential_key: Option<&str>,
     client: reqwest::Client,
-) -> Result<StreamableHttpClientTransport<AuthClient<reqwest::Client>>> {
+    transport: C,
+) -> Result<StreamableHttpClientTransport<AuthClient<C>>> {
     let mut custom = HashMap::new();
     for (key, value) in headers {
         let name: reqwest::header::HeaderName = key
@@ -463,11 +477,11 @@ async fn build_http(
     // rmcp's manager builds its own client with default redirects; discovery
     // must obey the same rule as the transport, or it becomes the loophole.
     manager
-        .with_client(client.clone())
+        .with_client(client)
         .map_err(|e| Error::Connect(format!("could not prepare authorization: {e}")))?;
 
     Ok(StreamableHttpClientTransport::with_client(
-        AuthClient::new(client, manager),
+        AuthClient::new(transport, manager),
         config,
     ))
 }
@@ -553,17 +567,17 @@ async fn run(
             }
             Cmd::ListTools(reply) => {
                 tokio::spawn(async move {
-                    let _ = reply.send(peer.list_all_tools().await.map_err(request_error));
+                    let _ = reply.send(snapshot::all_tools(&peer).await.map_err(request_error));
                 });
             }
             Cmd::ListResources(reply) => {
                 tokio::spawn(async move {
-                    let _ = reply.send(peer.list_all_resources().await.map_err(request_error));
+                    let _ = reply.send(snapshot::all_resources(&peer).await.map_err(request_error));
                 });
             }
             Cmd::ListPrompts(reply) => {
                 tokio::spawn(async move {
-                    let _ = reply.send(peer.list_all_prompts().await.map_err(request_error));
+                    let _ = reply.send(snapshot::all_prompts(&peer).await.map_err(request_error));
                 });
             }
             Cmd::Snapshot(reply) => {

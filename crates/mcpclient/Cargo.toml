@@ -37,6 +37,10 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # OAuth credentials go to the system keychain, not the local database.
 keyring = { version = "3", features = ["apple-native"] }
 async-trait = "0.1"
+# The bounded Streamable HTTP backend (`bounded.rs`) parses SSE itself, so it
+# can count the bytes rmcp's own backend reads uncapped.
+sse-stream = "0.2"
+futures-util = { version = "0.3", default-features = false }
 url = "2.5"
 
 schemadiff = { path = "../schemadiff" }

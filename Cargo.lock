@@ -3442,6 +3442,7 @@ name = "mcpclient"
 version = "0.1.4"
 dependencies = [
  "async-trait",
+ "futures-util",
  "httpguard",
  "keyring",
  "reqwest 0.13.4",
@@ -3449,6 +3450,7 @@ dependencies = [
  "schemadiff",
  "serde",
  "serde_json",
+ "sse-stream",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

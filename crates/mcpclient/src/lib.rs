@@ -26,6 +26,7 @@ use rmcp::model::{
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 
+mod bounded;
 mod oauth;
 mod pathenv;
 mod session;

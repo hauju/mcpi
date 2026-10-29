@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rmcp::model::ServerPeerInfo;
-use rmcp::service::{Peer, RoleClient};
+use rmcp::model::{ErrorData, PaginatedRequestParams, Prompt, Resource, ServerPeerInfo, Tool};
+use rmcp::service::{Peer, RoleClient, ServiceError};
 use schemadiff::Snapshot;
 use serde::Serialize;
 use serde_json::Value;
@@ -22,9 +22,9 @@ pub(crate) async fn collect(
     // server without the capability is an error, not an empty list, and would
     // otherwise fail the whole snapshot.
     let (tools, resources, prompts) = tokio::join!(
-        maybe(capabilities.tools.is_some(), peer.list_all_tools()),
-        maybe(capabilities.resources.is_some(), peer.list_all_resources()),
-        maybe(capabilities.prompts.is_some(), peer.list_all_prompts()),
+        maybe(capabilities.tools.is_some(), all_tools(peer)),
+        maybe(capabilities.resources.is_some(), all_resources(peer)),
+        maybe(capabilities.prompts.is_some(), all_prompts(peer)),
     );
 
     Ok(Snapshot {
@@ -45,6 +45,69 @@ pub(crate) async fn collect(
         resources: keyed(resources?, |r| r.uri.clone()),
         prompts: keyed(prompts?, |p| p.name.clone()),
     })
+}
+
+/// Pages followed per list before giving up. rmcp's `list_all_*` follow
+/// `next_cursor` for as long as the server hands one out, so a server that
+/// always does would keep a hosted caller listing until memory ran out.
+const MAX_PAGES: usize = 100;
+
+/// Items kept per list, across every page.
+const MAX_ITEMS: usize = 10_000;
+
+/// Follow `next_cursor` the way rmcp's `list_all_*` do, under both caps.
+async fn paged<T, F, Fut>(mut page: F) -> std::result::Result<Vec<T>, ServiceError>
+where
+    F: FnMut(PaginatedRequestParams) -> Fut,
+    Fut: Future<Output = std::result::Result<(Vec<T>, Option<String>), ServiceError>>,
+{
+    let mut items = Vec::new();
+    let mut cursor = None;
+    for _ in 0..MAX_PAGES {
+        let (batch, next) = page(PaginatedRequestParams::default().with_cursor(cursor)).await?;
+        items.extend(batch);
+        if items.len() > MAX_ITEMS {
+            break;
+        }
+        match next {
+            None => return Ok(items),
+            next => cursor = next,
+        }
+    }
+    Err(ServiceError::McpError(ErrorData::internal_error(
+        format!("the server listed more than {MAX_ITEMS} items or {MAX_PAGES} pages"),
+        None,
+    )))
+}
+
+pub(crate) async fn all_tools(
+    peer: &Peer<RoleClient>,
+) -> std::result::Result<Vec<Tool>, ServiceError> {
+    paged(|params| async move {
+        let page = peer.list_tools(Some(params)).await?;
+        Ok((page.tools, page.next_cursor))
+    })
+    .await
+}
+
+pub(crate) async fn all_resources(
+    peer: &Peer<RoleClient>,
+) -> std::result::Result<Vec<Resource>, ServiceError> {
+    paged(|params| async move {
+        let page = peer.list_resources(Some(params)).await?;
+        Ok((page.resources, page.next_cursor))
+    })
+    .await
+}
+
+pub(crate) async fn all_prompts(
+    peer: &Peer<RoleClient>,
+) -> std::result::Result<Vec<Prompt>, ServiceError> {
+    paged(|params| async move {
+        let page = peer.list_prompts(Some(params)).await?;
+        Ok((page.prompts, page.next_cursor))
+    })
+    .await
 }
 
 /// Await `fut` only when `supported`, otherwise yield an empty list.
