@@ -1,4 +1,4 @@
-//! Tool selection: one Jev `choice` over the candidates plus three gate nouls and a compound
+//! Tool selection: one Jev `choice` over the candidates plus a gate noul and a compound
 //! noul, then a deterministic selection rule (cumulative probability, `k` bounds,
 //! flat-distribution fallback, compound extension).
 
@@ -12,8 +12,7 @@ use crate::jev::{Choice, Jev, Noul, Question};
 use crate::retrieval::{self, Embedder, PastRequest, RetrievalStats};
 
 const NONE_OPTION: &str = "none";
-/// Below this mean the three gate nouls say the request wants no tool at all.
-/// The nouls are a mean of three 0-1 judgments, so 0.5 is the neutral point.
+/// Below this the gate noul says the request wants no tool at all. 0.5 is the neutral point.
 const GATE_FLOOR: f64 = 0.5;
 /// A runner-up scoring at least this fraction of the winner makes the two
 /// comparable, which is what "scored alike" has to mean: a ratio against the
@@ -264,18 +263,6 @@ impl Router {
                 }),
             ),
             (
-                "lookup",
-                Question::Noul(Noul {
-                    instructions: "Would fulfilling `request` require looking up live data or calling an external service, rather than relying on general knowledge?".into(),
-                }),
-            ),
-            (
-                "prose",
-                Question::Noul(Noul {
-                    instructions: "Can `request` be answered with prose alone, with no tool call and no external data?".into(),
-                }),
-            ),
-            (
                 "compound",
                 Question::Noul(Noul {
                     instructions: "Does `request` ask for two or more separate things that would each need its own tool call?".into(),
@@ -297,8 +284,18 @@ impl Router {
             .choices
             .get("pick")
             .ok_or_else(|| crate::jev::Error::MissingAnswer("pick".into()))?;
-        let noul = |name: &str| answers.nouls.get(name).copied().unwrap_or(0.5);
-        let gate = (noul("acts") + noul("lookup") + (1.0 - noul("prose"))) / 3.0;
+        // A missing answer reads as 0.5, which quietly switches the gate or the compound
+        // extension off. Say so, rather than route on a guess nobody can see.
+        let noul = |name: &str| {
+            answers.nouls.get(name).copied().unwrap_or_else(|| {
+                tracing::warn!(question = name, "Jev returned no answer; reading it as 0.5");
+                0.5
+            })
+        };
+        // One noul, not three: the decision-model APIs cap a request at three questions
+        // (pick, acts, compound), and "answerable with prose alone" only repeated the
+        // choice's own `none` option.
+        let gate = noul("acts");
         let p_none = pick.probabilities.get(NONE_OPTION).copied().unwrap_or(0.0);
 
         let mut scored: Vec<Scored> = candidates
@@ -431,7 +428,7 @@ impl Router {
 /// never `Ranked`, and `Ranked` always means a clear winner.
 ///
 /// The gate answers "does this need a tool at all". It decides only where the
-/// choice has no strong opinion of its own — three generic nouls must not
+/// choice has no strong opinion of its own — a generic noul must not
 /// overrule a distribution built over the actual catalog, which would steer a
 /// model away from a tool the router rated 0.85. See [`Verdict`] for the
 /// verdict this deliberately cannot reach.
