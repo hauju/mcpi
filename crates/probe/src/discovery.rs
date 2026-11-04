@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::Report;
+use crate::{Finding, Report, Severity};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProtectedResource {
@@ -88,6 +88,96 @@ pub(crate) async fn resolve(client: &httpguard::Client, url: &str, report: &mut 
             break;
         }
     }
+}
+
+/// Report the metadata a client would reject. Both checks are deliberately
+/// looser than the RFCs: a finding here says a client that validates will fail,
+/// so only what fails that way counts.
+pub(crate) fn derive_findings(report: &mut Report) {
+    let resource = report
+        .protected_resource
+        .as_ref()
+        .and_then(|found| found.resource.clone())
+        .filter(|resource| !resource_covers(resource, &report.url));
+    if let Some(resource) = resource {
+        report.findings.push(Finding::new(
+            Severity::Warning,
+            "The metadata names a different resource",
+            format!(
+                "The protected-resource metadata says it describes {resource}, which does not \
+                 cover {}. RFC 9728 has clients reject metadata that names another resource, so \
+                 sign-in can fail before it starts.",
+                report.url
+            ),
+        ));
+    }
+
+    let Some(auth) = report.authorization_server.as_ref() else {
+        return;
+    };
+    let expected = expected_issuers(report);
+    if !expected
+        .iter()
+        .any(|issuer| same_issuer(issuer, &auth.issuer))
+    {
+        report.findings.push(Finding::new(
+            Severity::Warning,
+            "The issuer does not match",
+            format!(
+                "The authorization server calls itself {}, but a client reached it as {}. \
+                 RFC 8414 has clients reject metadata whose issuer differs from the one they \
+                 asked for, so sign-in can fail before it starts.",
+                auth.issuer,
+                expected.join(" or ")
+            ),
+        ));
+    }
+}
+
+/// Whether a client at `endpoint` can accept metadata naming `resource`: same
+/// origin, and the endpoint is that path or beneath it. A resource naming the
+/// origin covers everything on it.
+fn resource_covers(resource: &str, endpoint: &str) -> bool {
+    let Ok(endpoint) = url::Url::parse(endpoint) else {
+        return true;
+    };
+    let Ok(resource) = url::Url::parse(resource) else {
+        return false;
+    };
+    let resource_path = resource.path().trim_end_matches('/');
+    let endpoint_path = endpoint.path().trim_end_matches('/');
+    resource.origin() == endpoint.origin()
+        && (endpoint_path == resource_path
+            || endpoint_path.starts_with(&format!("{resource_path}/")))
+}
+
+/// The issuers a client would expect: the ones the resource metadata names, or
+/// failing that the one the fetched metadata URL was derived from.
+fn expected_issuers(report: &Report) -> Vec<String> {
+    let named = report
+        .protected_resource
+        .as_ref()
+        .map(|found| found.authorization_servers.clone())
+        .unwrap_or_default();
+    if !named.is_empty() {
+        return named;
+    }
+    report
+        .authorization_server
+        .iter()
+        .map(|auth| {
+            auth.metadata_url
+                .replace("/.well-known/oauth-authorization-server", "")
+                .replace("/.well-known/openid-configuration", "")
+        })
+        .collect()
+}
+
+/// Issuers compare as strings, except for a trailing slash: strict clients do
+/// refuse one, but so many deployments differ only by it that flagging it would
+/// bury the mismatches that break everyone.
+fn same_issuer(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/') == b.trim_end_matches('/')
 }
 
 /// Both well-known spellings for a resource, most specific first.

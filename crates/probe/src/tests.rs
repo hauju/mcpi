@@ -1145,3 +1145,88 @@ async fn discovery_asks_before_fetching_a_linked_card() {
     assert!(result.catalog.is_some());
     assert!(!result.tried.iter().any(|url| url.contains("10.0.0.1")));
 }
+
+/// The titles of the two metadata findings for a server at `/mcp` whose
+/// documents are built from its own base URL.
+async fn metadata_findings(
+    resource: impl Fn(&str) -> String,
+    authorization_servers: impl Fn(&str) -> String,
+    issuer: impl Fn(&str) -> String,
+) -> Vec<String> {
+    let base = serve_with(|base| {
+        let mut routes = oauth_routes(&format!(
+            r#"{{"issuer":"{}","code_challenge_methods_supported":["S256"]}}"#,
+            issuer(base)
+        ));
+        routes.insert(
+            "/.well-known/oauth-protected-resource/mcp",
+            json_response(&format!(
+                r#"{{"resource":"{}","authorization_servers":{}}}"#,
+                resource(base),
+                authorization_servers(base)
+            )),
+        );
+        routes
+    })
+    .await;
+
+    probe(&format!("{base}/mcp"))
+        .await
+        .findings
+        .into_iter()
+        .filter(|f| f.title.contains("different resource") || f.title.contains("issuer"))
+        .map(|f| f.title)
+        .collect()
+}
+
+fn named(base: &str) -> String {
+    format!(r#"["{base}"]"#)
+}
+
+#[tokio::test]
+async fn correct_metadata_raises_neither_finding() {
+    let endpoint = |base: &str| format!("{base}/mcp");
+    let origin = |base: &str| base.to_string();
+    assert!(metadata_findings(endpoint, named, origin).await.is_empty());
+    // A resource naming the origin covers the endpoint on it.
+    assert!(metadata_findings(origin, named, origin).await.is_empty());
+    // Nothing named, so the issuer comes from the metadata URL itself.
+    let unnamed = |_: &str| "[]".to_string();
+    assert!(
+        metadata_findings(endpoint, unnamed, origin)
+            .await
+            .is_empty()
+    );
+    // Differing only by a trailing slash is not worth a finding.
+    let slashed = |base: &str| format!("{base}/");
+    assert!(metadata_findings(endpoint, named, slashed).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_resource_that_does_not_cover_the_endpoint_is_a_warning() {
+    let origin = |base: &str| base.to_string();
+    for resource in [
+        |_: &str| "https://other.example/mcp".to_string(),
+        // A shared prefix is not a parent path.
+        |base: &str| format!("{base}/mc"),
+    ] {
+        assert_eq!(
+            metadata_findings(resource, named, origin).await,
+            ["The metadata names a different resource"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_issuer_that_differs_from_the_one_expected_is_a_warning() {
+    let endpoint = |base: &str| format!("{base}/mcp");
+    let other = |_: &str| "https://other.example".to_string();
+    assert_eq!(
+        metadata_findings(endpoint, named, other).await,
+        ["The issuer does not match"]
+    );
+    assert_eq!(
+        metadata_findings(endpoint, |_: &str| "[]".to_string(), other).await,
+        ["The issuer does not match"]
+    );
+}

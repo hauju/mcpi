@@ -323,6 +323,7 @@ async fn probe_scoped(url: &str, public_only: bool) -> Report {
     }
 
     derive_findings(&mut report);
+    discovery::derive_findings(&mut report);
     card::derive_findings(&mut report);
     report
         .findings
