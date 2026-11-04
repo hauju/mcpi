@@ -803,3 +803,79 @@ fn a_retitled_tool_is_not_an_instruction_rewrite() {
     assert_eq!(d.severity(), Some(Severity::Cosmetic), "still a change");
     assert!(d.instruction_rewrites().is_empty());
 }
+
+// ── Confirmed and unconfirmed breaking items ────────────────────────────────
+
+fn oneof(branches: Value) -> Value {
+    json!({ "oneOf": branches })
+}
+
+#[test]
+fn a_composed_change_alone_is_unconfirmed_but_still_breaking() {
+    let before = tool_snapshot(object_with(
+        "target",
+        oneof(json!([{ "type": "string" }])),
+        false,
+    ));
+    let after = tool_snapshot(object_with(
+        "target",
+        oneof(json!([{ "type": "string" }, { "type": "integer" }])),
+        false,
+    ));
+
+    let d = diff(&before, &after);
+    assert_eq!(d.severity(), Some(Severity::Breaking), "CI must still fail");
+    assert_eq!(d.unconfirmed_breaking_items(), d.breaking_items());
+    assert!(d.confirmed_breaking_items().is_empty());
+}
+
+#[test]
+fn a_provable_break_beside_a_composed_change_is_confirmed() {
+    let mut before = object_with("target", oneof(json!([{ "type": "string" }])), false);
+    before["properties"]["limit"] = json!({ "type": "integer" });
+    let after = object_with("target", oneof(json!([{ "type": "integer" }])), false);
+
+    let d = diff(&tool_snapshot(before), &tool_snapshot(after));
+    assert_eq!(d.confirmed_breaking_items(), d.breaking_items());
+    assert!(d.unconfirmed_breaking_items().is_empty());
+}
+
+#[test]
+fn a_removed_tool_is_confirmed() {
+    let before = tool_snapshot(object_with("target", json!({ "type": "string" }), false));
+    let after = Snapshot::default();
+
+    let d = diff(&before, &after);
+    assert_eq!(d.confirmed_breaking_items(), d.breaking_items());
+    assert!(d.unconfirmed_breaking_items().is_empty());
+}
+
+#[test]
+fn a_removed_resource_is_unconfirmed_but_a_changed_mime_type_is_not() {
+    let resource = |mime: &str| json!({ "uri": "file:///a", "mimeType": mime });
+    let snapshot = |uri: &str, mime: &str| Snapshot {
+        resources: [(uri.to_string(), resource(mime))].into(),
+        ..Default::default()
+    };
+
+    let removed = diff(&snapshot("file:///a", "text/plain"), &Snapshot::default());
+    assert_eq!(removed.severity(), Some(Severity::Breaking));
+    assert_eq!(removed.unconfirmed_breaking_items(), ["file:///a"]);
+
+    let retyped = diff(
+        &snapshot("file:///a", "text/plain"),
+        &snapshot("file:///a", "application/json"),
+    );
+    assert_eq!(retyped.confirmed_breaking_items(), ["file:///a"]);
+    assert!(retyped.unconfirmed_breaking_items().is_empty());
+}
+
+#[test]
+fn a_stored_change_without_the_flag_still_reads() {
+    let change: crate::FieldChange = serde_json::from_value(json!({
+        "path": "x", "kind": "changed", "severity": "breaking", "note": "n",
+        "before": null, "after": null,
+    }))
+    .unwrap();
+    assert!(!change.unanalysed);
+}

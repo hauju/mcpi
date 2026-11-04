@@ -60,6 +60,10 @@ pub struct FieldChange {
     pub note: String,
     pub before: Option<Value>,
     pub after: Option<Value>,
+    /// The engine could not read this change, so `severity` leans breaking
+    /// rather than stay quiet. See [`SnapshotDiff::unconfirmed_breaking_items`].
+    #[serde(default)]
+    pub unanalysed: bool,
 }
 
 impl FieldChange {
@@ -82,6 +86,7 @@ impl FieldChange {
             note: note.into(),
             before: before.cloned(),
             after: after.cloned(),
+            unanalysed: false,
         }
     }
 }
@@ -119,6 +124,17 @@ impl ItemChange {
                 .map(|f| f.severity)
                 .max()
                 .unwrap_or(Severity::Cosmetic),
+        }
+    }
+
+    /// Every breaking field is one the engine could not read.
+    fn breaks_only_unanalysed(&self) -> bool {
+        match self {
+            Self::Modified { fields, .. } => fields
+                .iter()
+                .filter(|f| f.severity == Severity::Breaking)
+                .all(|f| f.unanalysed),
+            Self::Added { .. } | Self::Removed { .. } => false,
         }
     }
 }
@@ -279,6 +295,41 @@ impl SnapshotDiff {
             .iter()
             .chain(&self.resources)
             .chain(&self.prompts)
+            .filter(|i| i.severity() == Severity::Breaking)
+            .map(ItemChange::name)
+            .collect()
+    }
+
+    /// The part of [`Self::breaking_items`] this diff can prove.
+    pub fn confirmed_breaking_items(&self) -> Vec<&str> {
+        self.breaking_by_confirmation(false)
+    }
+
+    /// The part of [`Self::breaking_items`] this diff cannot prove: a composed
+    /// schema the engine does not analyse, or a removed resource.
+    ///
+    /// Deliberately not a severity, for the same reason as
+    /// [`Self::instruction_rewrites`]. `Breaking` stays the answer for anything
+    /// that must not pass silently, so CI still fails on these. This answers a
+    /// different question, "can we state this publicly as fact". A resource
+    /// list is data, so a removal is usually a row going away, and a changed
+    /// `oneOf` may only have widened. Either can still break a caller, so a
+    /// consumer must say these need review and never that they are safe.
+    pub fn unconfirmed_breaking_items(&self) -> Vec<&str> {
+        self.breaking_by_confirmation(true)
+    }
+
+    fn breaking_by_confirmation(&self, unconfirmed: bool) -> Vec<&str> {
+        let contract = |item: &&ItemChange| item.breaks_only_unanalysed() == unconfirmed;
+        let resource = |item: &&ItemChange| {
+            (item.breaks_only_unanalysed() || matches!(item, ItemChange::Removed { .. }))
+                == unconfirmed
+        };
+        self.tools
+            .iter()
+            .filter(contract)
+            .chain(self.resources.iter().filter(resource))
+            .chain(self.prompts.iter().filter(contract))
             .filter(|i| i.severity() == Severity::Breaking)
             .map(ItemChange::name)
             .collect()

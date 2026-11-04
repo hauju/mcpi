@@ -184,6 +184,9 @@ The headline feature, shown in four places that all read one source — `Connect
 - **The nullable wrapper is unwrapped before the opaque-composition rule.** Otherwise every inner
   edit to an optional field on a pydantic server — even a loosened enum, which is genuinely
   compatible — reported as unanalysable and therefore breaking.
+- **Unconfirmed breaks are named apart from severity.** `unconfirmed_breaking_items` reports breaking
+  items the diff cannot prove: unanalysed composed schemas and removed resources. They stay
+  `Breaking`, so CI still fails. Public surfaces say "review" for them, never "safe".
 - **Instruction rewrites are named apart from severity.** `SnapshotDiff::instruction_rewrites`
   reports items whose `description` or `annotations` changed. A rewritten description stays
   `Cosmetic` and that is correct — no caller's code breaks — but the description *is* the

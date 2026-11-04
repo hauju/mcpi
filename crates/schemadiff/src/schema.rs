@@ -111,13 +111,16 @@ pub(crate) fn diff_schema(
     // is catching breakage must not stay quiet about a change it cannot read.
     for key in COMPOSED {
         if b.get(key) != a.get(key) {
-            out.push(FieldChange::new(
-                join(path, key),
-                Severity::Breaking,
-                format!("`{key}` changed — composed schemas are not analysed, review by hand"),
-                b.get(key),
-                a.get(key),
-            ));
+            out.push(FieldChange {
+                unanalysed: true,
+                ..FieldChange::new(
+                    join(path, key),
+                    Severity::Breaking,
+                    format!("`{key}` changed — composed schemas are not analysed, review by hand"),
+                    b.get(key),
+                    a.get(key),
+                )
+            });
         }
     }
 
