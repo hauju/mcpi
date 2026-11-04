@@ -74,7 +74,18 @@ pub(crate) async fn identify(client: &httpguard::Client, url: &str, report: &mut
     // An HTML body is the single most common way this goes wrong: the
     // documentation page and the endpoint live at adjacent paths, and the URL
     // people copy is the one they were reading.
-    if content_type.contains("text/html") || body.trim_start().starts_with('<') {
+    //
+    // A 401 carrying a Bearer challenge is not that case, whatever it is
+    // labelled: proxies type empty and error bodies `text/html` by default, and
+    // the challenge is the MCP authorization handshake itself.
+    let bearer_challenge = status == 401
+        && report
+            .challenge
+            .as_deref()
+            .is_some_and(|c| c.trim_start().to_ascii_lowercase().starts_with("bearer"));
+    if !bearer_challenge
+        && (content_type.contains("text/html") || body.trim_start().starts_with('<'))
+    {
         // The page itself has to be fetched with GET. A route that only serves
         // HTML commonly answers POST with an empty `405`, so the body in hand
         // is nothing — and the links that name the real endpoint are in the
