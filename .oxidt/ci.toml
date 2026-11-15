@@ -1,0 +1,35 @@
+version = 1
+[job]
+image = "rust:1.99.0-trixie"
+timeout_minutes = 60
+
+# The image ships its own Rust; rust-toolchain.toml pins 1.97.1 without
+# components, so install that toolchain with rustfmt and clippy.
+[[job.steps]]
+name = "Setup"
+run = "rustup toolchain install 1.97.1 --profile minimal -c rustfmt -c clippy"
+
+[[job.steps]]
+name = "Format"
+run = "cargo fmt --all --check"
+check = true
+trust = "agent"
+
+# The headless crates only, per package as in the justfile: the desktop app
+# needs a system WebView and is checked on macOS, not here.
+[[job.steps]]
+name = "Clippy"
+run = "CARGO_INCREMENTAL=0 cargo clippy --locked -p schemadiff -p mcplint -p mcpclient -p mcpstore -p mockserver -p probe -p webprobe -p mcprouter -p mcpgateway -p mcpi-cli --all-targets -- -D warnings"
+check = true
+trust = "agent"
+
+# mcpclient's and mcpi-cli's suites spawn the mockserver binary over stdio, so
+# it has to exist first. webprobe's browser scans stay #[ignore]d: no Chrome here.
+[[job.steps]]
+name = "Test"
+run = "export CARGO_INCREMENTAL=0 RUSTFLAGS='-D warnings'; cargo build --locked -p mockserver && cargo test --locked -p schemadiff -p mcplint -p mcpclient -p mcpstore -p probe -p webprobe -p mcprouter -p mcpgateway -p mcpi-cli"
+check = true
+
+[job.cache]
+paths = ["cargo-registry", "cargo-git", "target"]
+key_files = ["Cargo.lock", "rust-toolchain.toml", ".oxidt/ci.toml"]
