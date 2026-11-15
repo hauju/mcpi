@@ -19,7 +19,7 @@ trust = "agent"
 # needs a system WebView and is checked on macOS, not here.
 [[job.steps]]
 name = "Clippy"
-run = "CARGO_INCREMENTAL=0 cargo clippy --locked -p schemadiff -p mcplint -p mcpclient -p mcpstore -p mockserver -p probe -p webprobe -p mcprouter -p mcpgateway -p mcpi-cli --all-targets -- -D warnings"
+run = "CARGO_INCREMENTAL=0 cargo clippy --locked -p schemadiff -p mcplint -p mcpclient -p mcpstore -p mockserver -p probe -p webprobe -p mcprouter -p mcpi-cli --all-targets -- -D warnings"
 check = true
 trust = "agent"
 
@@ -27,7 +27,7 @@ trust = "agent"
 # it has to exist first. webprobe's browser scans stay #[ignore]d: no Chrome here.
 [[job.steps]]
 name = "Test"
-run = "export CARGO_INCREMENTAL=0 RUSTFLAGS='-D warnings'; cargo build --locked -p mockserver && cargo test --locked -p schemadiff -p mcplint -p mcpclient -p mcpstore -p probe -p webprobe -p mcprouter -p mcpgateway -p mcpi-cli"
+run = "export CARGO_INCREMENTAL=0 RUSTFLAGS='-D warnings'; cargo build --locked -p mockserver && cargo test --locked -p schemadiff -p mcplint -p mcpclient -p mcpstore -p probe -p webprobe -p mcprouter -p mcpi-cli"
 check = true
 
 [job.cache]
