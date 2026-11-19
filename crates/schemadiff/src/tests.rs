@@ -879,3 +879,279 @@ fn a_stored_change_without_the_flag_still_reads() {
     .unwrap();
     assert!(!change.unanalysed);
 }
+
+// ---------------------------------------------------------------------------
+// The contract digest
+// ---------------------------------------------------------------------------
+
+/// A contract with every construct the digest normalises around: value lists
+/// the walker judges as sets, a nullable idiom, a genuine union, `$defs`, a
+/// tuple `items`, `annotations`, and a property literally named `_meta`.
+fn rich_snapshot() -> Snapshot {
+    let tool = json!({
+        "name": "search",
+        "description": "Search things",
+        "annotations": { "readOnlyHint": true, "_meta": { "x": 1 } },
+        "_meta": { "build": "abc" },
+        "inputSchema": {
+            "type": "object",
+            "_meta": { "trace": 1 },
+            "properties": {
+                "mode": { "type": "string", "enum": ["a", "b", "c"], "default": "a" },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["x", "y"], "examples": ["x", "y"] },
+                    "default": ["x", "y"],
+                },
+                "maybe": { "anyOf": [{ "type": "string", "enum": ["p", "q"] }, { "type": "null" }] },
+                "either": { "oneOf": [{ "type": "string", "enum": ["m", "n"] }, { "type": "integer" }] },
+                "kind": { "type": ["string", "integer"] },
+                "pair": { "type": "array", "items": [{ "type": "string" }, { "type": "integer" }] },
+                "ref": { "$ref": "#/$defs/Level" },
+                "_meta": { "type": "object" },
+            },
+            "required": ["mode", "tags"],
+            "$defs": { "Level": { "type": "string", "enum": ["low", "high"] } },
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": { "status": { "type": "string", "enum": ["ok", "err"] } },
+        },
+    });
+    let mut snapshot = tool_snapshot_with(tool);
+    snapshot.resources.insert(
+        "file:///a".into(),
+        json!({ "uri": "file:///a", "mimeType": "text/plain", "_meta": { "etag": "1" } }),
+    );
+    snapshot.prompts.insert(
+        "greet".into(),
+        json!({
+            "name": "greet",
+            "_meta": { "n": 1 },
+            "arguments": [{ "name": "who", "required": true }, { "name": "tone" }],
+        }),
+    );
+    snapshot
+}
+
+fn edited(snapshot: &Snapshot, pointer: &str, edit: impl FnOnce(&mut Value)) -> Snapshot {
+    let mut value = serde_json::to_value(snapshot).unwrap();
+    edit(
+        value
+            .pointer_mut(pointer)
+            .unwrap_or_else(|| panic!("no {pointer}")),
+    );
+    serde_json::from_value(value).unwrap()
+}
+
+const SEARCH: &str = "/tools/search";
+const PROPS: &str = "/tools/search/inputSchema/properties";
+
+/// The guard every contract-digest test leans on: equal digests must mean the
+/// classifier has nothing to report beyond cosmetics.
+#[track_caller]
+fn assert_only_cosmetic(before: &Snapshot, after: &Snapshot) {
+    let d = diff(before, after);
+    let counts = d.counts();
+    assert_eq!(
+        (counts.breaking, counts.compatible),
+        (0, 0),
+        "equal contract digests, but the diff says {d:#?}"
+    );
+    assert!(d.unconfirmed_breaking_items().is_empty());
+    assert!(d.instruction_rewrites().is_empty(), "{d:#?}");
+    assert!(d.capabilities.is_empty() && d.protocol_version.is_none());
+}
+
+#[track_caller]
+fn assert_same_contract(before: &Snapshot, after: &Snapshot) {
+    assert_ne!(
+        before.digest_source(),
+        after.digest_source(),
+        "not a change"
+    );
+    assert_eq!(
+        before.contract_digest_source(),
+        after.contract_digest_source()
+    );
+    assert_only_cosmetic(before, after);
+}
+
+#[track_caller]
+fn assert_new_contract(before: &Snapshot, after: &Snapshot) {
+    assert_ne!(
+        before.contract_digest_source(),
+        after.contract_digest_source()
+    );
+}
+
+#[test]
+fn contract_digest_ignores_a_version_only_bump() {
+    let before = rich_snapshot();
+    let mut after = before.clone();
+    after.server_version = "1.0.1+sha.deadbeef".into();
+    assert_same_contract(&before, &after);
+}
+
+#[test]
+fn contract_digest_ignores_meta_on_items_and_schema_nodes() {
+    let before = rich_snapshot();
+    for (pointer, key) in [
+        (SEARCH, "_meta"),
+        ("/tools/search/inputSchema", "_meta"),
+        ("/tools/search/inputSchema/properties/mode", "_meta"),
+        ("/tools/search/inputSchema/$defs/Level", "_meta"),
+        ("/resources/file:~1~1~1a", "_meta"),
+        ("/prompts/greet", "_meta"),
+    ] {
+        let after = edited(&before, pointer, |v| {
+            v[key] = json!({ "live": 42 });
+        });
+        assert_same_contract(&before, &after);
+    }
+}
+
+#[test]
+fn contract_digest_ignores_value_list_order() {
+    let before = rich_snapshot();
+    for pointer in [
+        "/tools/search/inputSchema/properties/mode/enum",
+        "/tools/search/inputSchema/properties/tags/items/enum",
+        "/tools/search/inputSchema/properties/tags/items/examples",
+        "/tools/search/inputSchema/properties/tags/default",
+        "/tools/search/inputSchema/properties/maybe/anyOf/0/enum",
+        "/tools/search/inputSchema/$defs/Level/enum",
+        "/tools/search/outputSchema/properties/status/enum",
+    ] {
+        let after = edited(&before, pointer, |v| v.as_array_mut().unwrap().reverse());
+        assert_same_contract(&before, &after);
+    }
+}
+
+#[test]
+fn contract_digest_moves_on_every_real_or_instruction_change() {
+    let before = rich_snapshot();
+    let cases = [
+        // An instruction rewrite is cosmetic, but it is exactly what a
+        // directory history exists to show.
+        edited(&before, SEARCH, |v| {
+            v["description"] = json!("Delete things")
+        }),
+        edited(&before, SEARCH, |v| v["title"] = json!("Search")),
+        edited(&before, &format!("{SEARCH}/annotations"), |v| {
+            v["_meta"] = json!({ "x": 2 });
+        }),
+        // A property *named* `_meta` is part of the input contract.
+        edited(&before, PROPS, |v| {
+            v.as_object_mut().unwrap().remove("_meta");
+        }),
+        // Inside a genuine union the walker compares raw and says breaking.
+        edited(&before, &format!("{PROPS}/either/oneOf/0/enum"), |v| {
+            v.as_array_mut().unwrap().reverse();
+        }),
+        edited(&before, &format!("{PROPS}/either/oneOf"), |v| {
+            v.as_array_mut().unwrap().reverse();
+        }),
+        // `type` arrays and tuple `items` are positional to the walker.
+        edited(&before, &format!("{PROPS}/kind/type"), |v| {
+            v.as_array_mut().unwrap().reverse();
+        }),
+        edited(&before, &format!("{PROPS}/pair/items"), |v| {
+            v.as_array_mut().unwrap().reverse();
+        }),
+        edited(&before, &format!("{PROPS}/mode/enum"), |v| {
+            v.as_array_mut().unwrap().pop();
+        }),
+        edited(&before, "/capabilities", |v| v["_meta"] = json!({})),
+    ];
+    for after in &cases {
+        assert_new_contract(&before, after);
+    }
+    let mut renamed = before.clone();
+    renamed.protocol_version = "2025-11-25".into();
+    assert_new_contract(&before, &renamed);
+}
+
+/// xorshift64*: deterministic, so a failing seed reproduces, and no test
+/// dependency for CI's `cargo machete` to object to.
+struct Rng(u64);
+
+impl Rng {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        (self.0.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 33) as usize % n
+    }
+}
+
+/// JSON pointers to every array and object below `value`.
+fn containers(value: &Value, at: String, out: &mut Vec<String>) {
+    let children: Vec<(String, &Value)> = match value {
+        Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| (k.replace('~', "~0").replace('/', "~1"), v))
+            .collect(),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i.to_string(), v))
+            .collect(),
+        _ => return,
+    };
+    out.push(at.clone());
+    for (key, child) in children {
+        containers(child, format!("{at}/{key}"), out);
+    }
+}
+
+/// The property behind the whole feature, checked against noise placed
+/// anywhere — including the places where it must *not* be ignored: whenever
+/// two snapshots share a contract digest, the classifier reports nothing but
+/// cosmetics between them.
+#[test]
+fn equal_contract_digests_never_hide_a_non_cosmetic_change() {
+    let base = rich_snapshot();
+    let base_value = serde_json::to_value(&base).unwrap();
+    let mut pointers = Vec::new();
+    containers(&base_value, String::new(), &mut pointers);
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let (mut same, mut moved) = (0, 0);
+
+    for _ in 0..5000 {
+        let mut value = base_value.clone();
+        for _ in 0..=rng.below(3) {
+            // An earlier edit this round may have removed the target.
+            let Some(target) = value.pointer_mut(&pointers[rng.below(pointers.len())]) else {
+                continue;
+            };
+            match (target, rng.below(3)) {
+                (Value::Array(items), _) if items.len() > 1 => {
+                    let (i, j) = (rng.below(items.len()), rng.below(items.len()));
+                    items.swap(i, j);
+                }
+                (Value::Object(map), 0) => {
+                    map.remove("_meta");
+                }
+                (Value::Object(map), _) => {
+                    map.insert("_meta".into(), json!({ "seq": rng.below(1000) }));
+                }
+                _ => {}
+            }
+        }
+        if rng.below(2) == 0 {
+            value["server_version"] = json!(format!("1.0.{}", rng.below(1000)));
+        }
+        let Ok(after) = serde_json::from_value::<Snapshot>(value) else {
+            continue; // `_meta` dropped onto a typed field's container
+        };
+        if base.contract_digest_source() == after.contract_digest_source() {
+            assert_only_cosmetic(&base, &after);
+            same += 1;
+        } else {
+            moved += 1;
+        }
+    }
+    // Neither branch may be vacuous.
+    assert!(same > 500 && moved > 500, "same {same}, moved {moved}");
+}

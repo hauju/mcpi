@@ -198,6 +198,41 @@ impl Snapshot {
             .expect("Snapshot holds only JSON-representable types, so this cannot fail");
         canonical_json(&value)
     }
+
+    /// [`Self::digest_source`] minus what moves without the contract moving:
+    /// the `server_version` string, each item's `_meta`, and the order of
+    /// value lists inside tool schemas.
+    ///
+    /// For a store that should keep one row per contract change rather than
+    /// one per deploy. Every exclusion is something [`diff`] already ignores
+    /// or calls cosmetic, and only at the places its walker reaches — so two
+    /// snapshots with one contract digest never differ by a breaking,
+    /// compatible, or instruction change. A `_meta` *property* of an input
+    /// schema, or an `enum` inside a real `oneOf`, still moves the digest.
+    pub fn contract_digest_source(&self) -> String {
+        let mut value = serde_json::to_value(self)
+            .expect("Snapshot holds only JSON-representable types, so this cannot fail");
+        let Value::Object(map) = &mut value else {
+            unreachable!("Snapshot serializes to an object");
+        };
+        map.remove("server_version");
+        for kind in ["tools", "resources", "prompts"] {
+            let Some(Value::Object(items)) = map.get_mut(kind) else {
+                continue;
+            };
+            for item in items.values_mut().filter_map(Value::as_object_mut) {
+                item.remove("_meta");
+                if kind == "tools" {
+                    for key in ["inputSchema", "outputSchema"] {
+                        if let Some(schema) = item.get_mut(key) {
+                            schema::normalize(schema);
+                        }
+                    }
+                }
+            }
+        }
+        canonical_json(&value)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

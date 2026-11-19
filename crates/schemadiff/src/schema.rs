@@ -714,6 +714,70 @@ fn diff_documentation(
     }
 }
 
+/// Value lists [`diff_enum`] and [`diff_documentation`] judge as sets or as
+/// cosmetic, so their order is noise.
+const UNORDERED: [&str; 3] = ["enum", "default", "examples"];
+
+/// Rewrite a schema so that edits the walker above calls cosmetic or never
+/// looks at — a reordered value list, a `_meta` keyword — leave no trace.
+///
+/// Follows exactly the paths [`diff_schema`] recurses through: `properties`,
+/// object-form `items`, `$defs`/`definitions`, and the one real branch of the
+/// nullable idiom. Everything else — a genuine `oneOf`, a tuple `items`,
+/// `additionalProperties`, `type` — is compared raw there, so it is left
+/// byte for byte here: normalising what the walker compares raw would hide a
+/// breaking change behind an unchanged digest.
+pub(crate) fn normalize(schema: &mut Value) {
+    let Some(map) = schema.as_object_mut() else {
+        return;
+    };
+    map.remove("_meta");
+    for key in UNORDERED {
+        if let Some(Value::Array(values)) = map.get_mut(key) {
+            values.sort_by_cached_key(crate::canonical_json);
+        }
+    }
+    if let Some(index) = nullable_branch(map) {
+        let key = if map.contains_key("anyOf") {
+            "anyOf"
+        } else {
+            "oneOf"
+        };
+        if let Some(Value::Array(branches)) = map.get_mut(key) {
+            normalize(&mut branches[index]);
+        }
+    }
+    if let Some(items @ Value::Object(_)) = map.get_mut("items") {
+        normalize(items);
+    }
+    for key in ["properties", "$defs", "definitions"] {
+        if let Some(Value::Object(children)) = map.get_mut(key) {
+            children.values_mut().for_each(normalize);
+        }
+    }
+}
+
+/// The index of the one concrete branch when `map` is the nullable idiom as
+/// [`split_nullable`] recognises it, i.e. when [`diff_nullable_idiom`] would
+/// compare that branch structurally rather than the union raw.
+fn nullable_branch(map: &Map<String, Value>) -> Option<usize> {
+    let key = ["anyOf", "oneOf"]
+        .into_iter()
+        .find(|k| map.contains_key(*k))?;
+    if COMPOSED.iter().any(|k| *k != key && map.contains_key(*k)) {
+        return None;
+    }
+    let branches = map.get(key)?.as_array()?;
+    let mut real = branches
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !is_null_branch(b));
+    match (real.next(), real.next()) {
+        (Some((index, branch)), None) if branch.is_object() => Some(index),
+        _ => None,
+    }
+}
+
 fn join(path: &str, key: &str) -> String {
     if path.is_empty() {
         key.to_string()
