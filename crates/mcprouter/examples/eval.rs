@@ -9,7 +9,7 @@
 //! "is the model earning its place":
 //!
 //! * `bm25` — the lexical shortlist alone, no model, no API calls, free.
-//! * `jev`  — the shipping router: one choice plus three gate nouls, over the
+//! * `jev`  — the shipping router: one choice plus a gate and a compound noul, over the
 //!   whole catalog, a BM25 shortlist, and the hybrid shortlist.
 //!
 //! If the arms tie on a catalog this size, the model is buying `p_none`, the
@@ -25,6 +25,10 @@
 //! With a key, Jev runs over the whole catalog and then behind a BM25 shortlist
 //! of `EVAL_SHORTLIST` (default 50, the hosted gateway's size); `eval-embed`
 //! adds the hybrid shortlist with the hosted gateway's embedder.
+//!
+//! `EVAL_MODEL` and `EVAL_REGION` point it at another model or region, e.g. Decision
+//! Models' EU tier: `TYPESAFE_BASE_URL=https://api.decisionmodels.io EVAL_MODEL=s1-pro
+//! EVAL_REGION=eu`. A provider that caps options per question skips the whole-catalog arm.
 //!
 //! The golden file is `{ catalog: [{server, name, key, description,
 //! input_schema}], cases: [{request, expect: [key]}] }`. An empty `expect` is a
@@ -242,21 +246,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     let jev = || -> Result<Jev, mcprouter::jev::Error> {
-        let mut jev = Jev::new(api_key.clone(), mcprouter::jev::DEFAULT_MODEL)?;
+        let model =
+            std::env::var("EVAL_MODEL").unwrap_or_else(|_| mcprouter::jev::DEFAULT_MODEL.into());
+        let mut jev = Jev::new(api_key.clone(), model)?;
         if let Ok(base) = std::env::var(mcprouter::jev::BASE_URL_ENV) {
             jev = jev.with_base_url(base);
+        }
+        if let Ok(region) = std::env::var("EVAL_REGION") {
+            jev = jev.with_region(region);
         }
         Ok(jev)
     };
     let router = Router::new(jev()?, settings.clone(), &entries, None, Vec::new()).await;
-    run_router(
+    if let Err(e) = run_router(
         "jev, whole catalog",
         &router,
         &entries,
         &golden.cases,
         no_fit_cases,
     )
-    .await?;
+    .await
+    {
+        println!("\njev, whole catalog — skipped: {e}");
+    }
 
     // --- shortlisted ------------------------------------------------------
     // What the hosted gateway does with a catalog this size: Jev only ranks the

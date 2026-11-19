@@ -158,6 +158,17 @@ Listings are free and come with a status badge for your README:
 [![MCP status](https://mcpi.app/servers/<slug>/badge.svg)](https://mcpi.app/servers/<slug>)
 ```
 
+## The hosted gateway in Claude
+
+[mcpi.app/gateway](https://mcpi.app/gateway) is a hosted MCP server in front of the remote
+endpoints you register there. Claude sees `find_tools` and `call_tool` instead of every server's
+tool definitions. Install it in Claude Code with the
+[mcpi-gateway plugin](https://github.com/hauju/mcpi-claude-plugin):
+
+```sh
+claude plugin install mcpi-gateway --marketplace hauju/mcpi-claude-plugin
+```
+
 ## Status
 
 Pre-release. No published binaries yet — build from source:

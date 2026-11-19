@@ -23,7 +23,7 @@ use rmcp::model::{
     GetPromptResponse, GetPromptResult, Implementation, JsonObject, ListPromptsResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt, PromptArgument,
     PromptMessage, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
+    ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServiceExt};
@@ -183,8 +183,8 @@ fn echo_tool() -> Tool {
 }
 
 impl ServerHandler for Mock {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()

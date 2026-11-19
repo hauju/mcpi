@@ -20,5 +20,5 @@ thiserror = "2.0.17"
 tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 
-rmcp = "3.0"
+rmcp = "3.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

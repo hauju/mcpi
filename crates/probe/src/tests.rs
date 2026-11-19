@@ -1230,3 +1230,59 @@ async fn an_issuer_that_differs_from_the_one_expected_is_a_warning() {
         ["The issuer does not match"]
     );
 }
+
+fn html_401(challenge: Option<&str>, body: &str) -> String {
+    let header = challenge
+        .map(|c| format!("WWW-Authenticate: {c}\r\n"))
+        .unwrap_or_default();
+    format!(
+        "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/html; charset=UTF-8\r\n{header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+#[tokio::test]
+async fn an_empty_bearer_401_typed_html_is_auth_gated_not_a_web_page() {
+    // pattorelay.com/mcp exactly: nginx labels the empty 401 text/html.
+    let base = serve(HashMap::from([(
+        "/mcp",
+        html_401(Some(r#"Bearer resource_metadata="https://x.test/m""#), ""),
+    )]))
+    .await;
+
+    let report = probe(&format!("{base}/mcp")).await;
+    assert!(
+        matches!(report.kind, Some(EndpointKind::Mcp)),
+        "{:?}",
+        report.kind
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.title == "Authentication is required to connect")
+    );
+    assert!(
+        !report
+            .findings
+            .iter()
+            .any(|f| f.title.contains("not an MCP endpoint"))
+    );
+}
+
+#[tokio::test]
+async fn a_login_wall_without_a_bearer_challenge_stays_a_web_page() {
+    for challenge in [None, Some(r#"Basic realm="admin""#)] {
+        let base = serve(HashMap::from([(
+            "/mcp",
+            html_401(challenge, "<html><body>Sign in</body></html>"),
+        )]))
+        .await;
+        let report = probe(&format!("{base}/mcp")).await;
+        assert!(
+            matches!(report.kind, Some(EndpointKind::WebPage { .. })),
+            "{:?}",
+            report.kind
+        );
+    }
+}

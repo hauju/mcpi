@@ -13,6 +13,8 @@ pub const API_KEY_ENV: &str = "TYPESAFE_API_KEY";
 pub const BASE_URL_ENV: &str = "TYPESAFE_BASE_URL";
 pub const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 pub const DEFAULT_MODEL: &str = "jev-latest";
+/// Sent as `S1-Region` when set. Decision Models serves its EU tier behind `S1-Region: eu`.
+pub const REGION_HEADER: &str = "S1-Region";
 
 const ATTEMPTS: u32 = 3;
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -69,6 +71,7 @@ pub struct Jev {
     base_url: String,
     api_key: String,
     model: String,
+    region: Option<String>,
 }
 
 impl Jev {
@@ -90,11 +93,18 @@ impl Jev {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.into(),
             model: model.into(),
+            region: None,
         })
     }
 
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = url.into().trim_end_matches('/').to_string();
+        self
+    }
+
+    /// Pin processing to a region (`eu`) on providers that offer one.
+    pub fn with_region(mut self, region: impl Into<String>) -> Self {
+        self.region = Some(region.into());
         self
     }
 
@@ -110,13 +120,11 @@ impl Jev {
         let mut attempt = 0;
         let value: Value = loop {
             attempt += 1;
-            let sent = self
-                .http
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .json(&body)
-                .send()
-                .await;
+            let mut req = self.http.post(&url).bearer_auth(&self.api_key);
+            if let Some(region) = &self.region {
+                req = req.header(REGION_HEADER, region);
+            }
+            let sent = req.json(&body).send().await;
             let retry_after = Duration::from_millis(500 * 2u64.pow(attempt - 1));
             match sent {
                 Ok(resp) if resp.status().is_success() => break resp.json().await?,
@@ -214,5 +222,43 @@ mod tests {
             serde_json::to_value(q).unwrap(),
             serde_json::json!({"type": "noul", "instructions": "x"})
         );
+    }
+
+    /// The raw request head a `Jev` sends, read by a one-shot TCP listener.
+    async fn sent_head(jev: impl FnOnce(String) -> Jev) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0; 8192];
+            let n = sock.read(&mut buf).await.unwrap();
+            let body = r#"{"answers":{}}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_lowercase()
+        });
+        jev(base)
+            .system_one(&serde_json::json!({}), &BTreeMap::new())
+            .await
+            .unwrap();
+        server.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn region_header_only_when_set() {
+        let with = sent_head(|b| {
+            Jev::new("k", "m")
+                .unwrap()
+                .with_base_url(b)
+                .with_region("eu")
+        })
+        .await;
+        assert!(with.contains("s1-region: eu"), "{with}");
+        let without = sent_head(|b| Jev::new("k", "m").unwrap().with_base_url(b)).await;
+        assert!(!without.contains("s1-region"), "{without}");
     }
 }
