@@ -271,6 +271,22 @@ fn type_widened_is_compatible() {
 // ── Cosmetic: noise that must not raise an alarm ────────────────────────────
 
 #[test]
+fn type_list_reordered_is_cosmetic() {
+    for (before, after) in [
+        (json!(["string", "integer"]), json!(["integer", "string"])),
+        (json!("string"), json!(["string"])),
+    ] {
+        let before = tool_snapshot(object_with("id", json!({ "type": before }), false));
+        let after = tool_snapshot(object_with("id", json!({ "type": after }), false));
+
+        let d = diff(&before, &after);
+        let change = find(&d, "inputSchema.properties.id.type");
+        assert_eq!(change.severity, Severity::Cosmetic);
+        assert_eq!(change.note, "type list reordered");
+    }
+}
+
+#[test]
 fn description_change_is_cosmetic() {
     let before = tool_snapshot_with(json!({
         "name": "search", "description": "Old wording", "inputSchema": { "type": "object" }

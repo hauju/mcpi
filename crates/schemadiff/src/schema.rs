@@ -278,17 +278,15 @@ fn diff_type(
             after,
         )),
         (Some(bt), Some(at)) => {
-            let severity = if at.iter().all(|t| bt.contains(t)) {
-                dir.restrict()
-            } else if bt.iter().all(|t| at.contains(t)) {
-                dir.relax()
-            } else {
-                Severity::Breaking
-            };
-            let note = match severity {
-                _ if at.iter().all(|t| bt.contains(t)) => "type narrowed",
-                _ if bt.iter().all(|t| at.contains(t)) => "type widened",
-                _ => "type changed to an unrelated type",
+            // A type list is a set: `["string","integer"]` reordered, or
+            // `"string"` written as `["string"]`, accepts the same values.
+            let all_kept = bt.iter().all(|t| at.contains(t));
+            let no_new = at.iter().all(|t| bt.contains(t));
+            let (severity, note) = match (all_kept, no_new) {
+                (true, true) => (Severity::Cosmetic, "type list reordered"),
+                (false, true) => (dir.restrict(), "type narrowed"),
+                (true, false) => (dir.relax(), "type widened"),
+                (false, false) => (Severity::Breaking, "type changed to an unrelated type"),
             };
             out.push(FieldChange::new(field, severity, note, before, after));
         }
