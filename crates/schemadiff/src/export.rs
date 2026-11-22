@@ -43,6 +43,7 @@ pub fn to_markdown(diff: &SnapshotDiff, subtitle: &str) -> String {
     group(&mut out, "Tools", &diff.tools);
     group(&mut out, "Resources", &diff.resources);
     group(&mut out, "Prompts", &diff.prompts);
+    group(&mut out, "Events", &diff.events);
 
     if !diff.capabilities.is_empty() {
         out.push_str("\n## Capabilities\n\n");

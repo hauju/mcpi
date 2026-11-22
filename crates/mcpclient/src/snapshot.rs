@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rmcp::model::{ErrorData, PaginatedRequestParams, Prompt, Resource, ServerPeerInfo, Tool};
+use rmcp::model::{
+    ClientRequest, CustomRequest, ErrorData, PaginatedRequestParams, Prompt, Resource,
+    ServerCapabilities, ServerPeerInfo, ServerResult, Tool,
+};
 use rmcp::service::{Peer, RoleClient, ServiceError};
 use schemadiff::Snapshot;
 use serde::Serialize;
@@ -21,10 +24,13 @@ pub(crate) async fn collect(
     // Only ask for what the server said it has. Calling `resources/list` on a
     // server without the capability is an error, not an empty list, and would
     // otherwise fail the whole snapshot.
-    let (tools, resources, prompts) = tokio::join!(
+    // A failed `events/list` fails the snapshot, as a failed `tools/list`
+    // does: an empty map would read as every event having been removed.
+    let (tools, resources, prompts, events) = tokio::join!(
         maybe(capabilities.tools.is_some(), all_tools(peer)),
         maybe(capabilities.resources.is_some(), all_resources(peer)),
         maybe(capabilities.prompts.is_some(), all_prompts(peer)),
+        maybe(supports_events(capabilities), all_events(peer)),
     );
 
     Ok(Snapshot {
@@ -44,6 +50,12 @@ pub(crate) async fn collect(
         tools: keyed(tools?, |t| t.name.to_string()),
         resources: keyed(resources?, |r| r.uri.clone()),
         prompts: keyed(prompts?, |p| p.name.clone()),
+        events: keyed(events?, |e| {
+            e.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        }),
     })
 }
 
@@ -116,6 +128,55 @@ pub(crate) async fn all_prompts(
     paged(|params| async move {
         let page = peer.list_prompts(Some(params)).await?;
         Ok((page.prompts, page.next_cursor))
+    })
+    .await
+}
+
+/// The MCP events extension (SEP-3415).
+const EVENTS_EXTENSION: &str = "io.modelcontextprotocol/events";
+
+/// Only the spec spelling is visible here: rmcp parses capabilities into a
+/// typed struct with no catch-all, so OpenAI's top-level `events: {}` never
+/// reaches this crate. A server advertising only that spelling has no events
+/// in its snapshot.
+fn supports_events(capabilities: &ServerCapabilities) -> bool {
+    capabilities
+        .extensions
+        .as_ref()
+        .is_some_and(|e| e.contains_key(EVENTS_EXTENSION))
+}
+
+/// Every event type, under the same caps as the other lists. rmcp has no
+/// typed `events/list`, so it goes out as a custom request.
+pub(crate) async fn all_events(
+    peer: &Peer<RoleClient>,
+) -> std::result::Result<Vec<Value>, ServiceError> {
+    paged(|params| async move {
+        let request = ClientRequest::CustomRequest(CustomRequest::new(
+            "events/list",
+            Some(to_value(&params)),
+        ));
+        // rmcp parses results into an untagged union; an extension result
+        // lands in `CustomResult`, anything else serializes back unchanged.
+        let page = match peer.send_request(request).await? {
+            ServerResult::CustomResult(result) => result.0,
+            other => to_value(&other),
+        };
+        let events = page
+            .get("events")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| {
+                ServiceError::McpError(ErrorData::internal_error(
+                    "events/list returned no `events` array",
+                    None,
+                ))
+            })?;
+        let next = page
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        Ok((events, next))
     })
     .await
 }

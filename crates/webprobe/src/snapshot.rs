@@ -32,6 +32,7 @@ pub(crate) fn build(url: &str, tools: &[Value]) -> Result<Snapshot> {
         // snapshot and an MCP one compare on the axis they share.
         resources: BTreeMap::new(),
         prompts: BTreeMap::new(),
+        events: BTreeMap::new(),
     })
 }
 

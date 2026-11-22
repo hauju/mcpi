@@ -314,3 +314,29 @@ async fn a_failed_spawn_still_yields_whatever_the_child_managed_to_say() {
         "expected the child's own error on stderr, got {backlog:#?}"
     );
 }
+
+#[tokio::test]
+async fn custom_request_reaches_methods_the_client_does_not_model() {
+    let (handle, _) = Handle::connect(&fixture("a"))
+        .await
+        .expect("fixture should connect");
+
+    let events = handle
+        .custom_request("events/list", None)
+        .await
+        .expect("fixture answers events/list");
+    assert_eq!(events["events"][0]["name"], "demo.created");
+    assert_eq!(events["resultType"], "complete", "extension fields survive");
+
+    let snapshot = handle.snapshot().await.expect("snapshot");
+    assert_eq!(
+        snapshot.events["demo.created"]["delivery"],
+        serde_json::json!(["webhook"]),
+        "an advertised events extension is listed into the snapshot"
+    );
+
+    let unknown = handle.custom_request("events/nope", None).await;
+    assert!(matches!(unknown, Err(Error::Request(_))), "{unknown:?}");
+
+    handle.shutdown().await.expect("clean shutdown");
+}

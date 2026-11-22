@@ -184,15 +184,42 @@ fn echo_tool() -> Tool {
 
 impl ServerHandler for Mock {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_resources()
-                .enable_prompts()
-                .build(),
-        )
-        .with_server_info(Implementation::new("mockserver", env!("CARGO_PKG_VERSION")))
-        .with_instructions("Fixture server. Variants `a` and `b` differ on purpose.")
+        let mut capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_prompts()
+            .build();
+        capabilities.extensions = Some(
+            [(
+                "io.modelcontextprotocol/events".to_string(),
+                JsonObject::new(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        ServerConfig::new(capabilities)
+            .with_server_info(Implementation::new("mockserver", env!("CARGO_PKG_VERSION")))
+            .with_instructions("Fixture server. Variants `a` and `b` differ on purpose.")
+    }
+
+    /// A method this crate's client does not model: `events/list` from the MCP
+    /// events extension, so `Handle::custom_request` has something to reach.
+    async fn on_custom_request(
+        &self,
+        request: rmcp::model::CustomRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CustomResult, McpError> {
+        match request.method.as_str() {
+            "events/list" => Ok(rmcp::model::CustomResult(json!({
+                "resultType": "complete",
+                "events": [{"name": "demo.created", "delivery": ["webhook"]}],
+            }))),
+            _ => Err(McpError::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                request.method,
+                None,
+            )),
+        }
     }
 
     async fn list_tools(

@@ -230,6 +230,22 @@ impl Handle {
         .await
     }
 
+    /// Send a request this client does not model, such as `events/subscribe`
+    /// from the MCP events extension, and return its raw result.
+    pub async fn custom_request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let method = method.to_string();
+        self.request(move |reply| session::Cmd::Custom {
+            method,
+            params,
+            reply,
+        })
+        .await
+    }
+
     pub async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult> {
         let uri = uri.to_string();
         self.request(move |reply| session::Cmd::ReadResource { uri, reply })

@@ -275,6 +275,7 @@ pub fn DiffDrawer() -> Element {
                     Group { title: "Tools", changes: diff.tools.clone() }
                     Group { title: "Resources", changes: diff.resources.clone() }
                     Group { title: "Prompts", changes: diff.prompts.clone() }
+                    Group { title: "Events", changes: diff.events.clone() }
 
                     if !diff.capabilities.is_empty() {
                         section { class: "space-y-2",

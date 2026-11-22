@@ -183,6 +183,12 @@ pub struct Snapshot {
     /// Prompt name → the full object returned by `prompts/list`.
     #[serde(default)]
     pub prompts: BTreeMap<String, Value>,
+    /// Event name → the full object returned by `events/list` (the MCP events
+    /// extension). Omitted when empty so that the digest of every server
+    /// without events is unchanged — otherwise each one would record a
+    /// phantom contract change on its next connect.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub events: BTreeMap<String, Value>,
 }
 
 impl Snapshot {
@@ -216,17 +222,20 @@ impl Snapshot {
             unreachable!("Snapshot serializes to an object");
         };
         map.remove("server_version");
-        for kind in ["tools", "resources", "prompts"] {
+        for kind in ["tools", "resources", "prompts", "events"] {
             let Some(Value::Object(items)) = map.get_mut(kind) else {
                 continue;
             };
             for item in items.values_mut().filter_map(Value::as_object_mut) {
                 item.remove("_meta");
-                if kind == "tools" {
-                    for key in ["inputSchema", "outputSchema"] {
-                        if let Some(schema) = item.get_mut(key) {
-                            schema::normalize(schema);
-                        }
+                let schemas: &[&str] = match kind {
+                    "tools" => &["inputSchema", "outputSchema"],
+                    "events" => &["inputSchema", "payloadSchema"],
+                    _ => &[],
+                };
+                for key in schemas {
+                    if let Some(schema) = item.get_mut(*key) {
+                        schema::normalize(schema);
                     }
                 }
             }
@@ -240,6 +249,8 @@ pub struct SnapshotDiff {
     pub tools: Vec<ItemChange>,
     pub resources: Vec<ItemChange>,
     pub prompts: Vec<ItemChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<ItemChange>,
     pub capabilities: Vec<FieldChange>,
     /// `(before, after)` when the negotiated protocol version moved.
     pub protocol_version: Option<(String, String)>,
@@ -252,6 +263,7 @@ impl SnapshotDiff {
         self.tools.is_empty()
             && self.resources.is_empty()
             && self.prompts.is_empty()
+            && self.events.is_empty()
             && self.capabilities.is_empty()
             && self.protocol_version.is_none()
             && self.server_version.is_none()
@@ -266,6 +278,7 @@ impl SnapshotDiff {
             .iter()
             .chain(&self.resources)
             .chain(&self.prompts)
+            .chain(&self.events)
             .map(ItemChange::severity)
             .chain(self.capabilities.iter().map(|f| f.severity))
             .max()
@@ -278,6 +291,7 @@ impl SnapshotDiff {
             .iter()
             .chain(&self.resources)
             .chain(&self.prompts)
+            .chain(&self.events)
         {
             counts.add(item.severity());
         }
@@ -311,6 +325,7 @@ impl SnapshotDiff {
             .iter()
             .chain(&self.resources)
             .chain(&self.prompts)
+            .chain(&self.events)
             .filter_map(|item| match item {
                 ItemChange::Modified { name, fields } => fields
                     .iter()
@@ -330,6 +345,7 @@ impl SnapshotDiff {
             .iter()
             .chain(&self.resources)
             .chain(&self.prompts)
+            .chain(&self.events)
             .filter(|i| i.severity() == Severity::Breaking)
             .map(ItemChange::name)
             .collect()
@@ -365,6 +381,7 @@ impl SnapshotDiff {
             .filter(contract)
             .chain(self.resources.iter().filter(resource))
             .chain(self.prompts.iter().filter(contract))
+            .chain(self.events.iter().filter(contract))
             .filter(|i| i.severity() == Severity::Breaking)
             .map(ItemChange::name)
             .collect()
@@ -377,6 +394,7 @@ pub fn diff(before: &Snapshot, after: &Snapshot) -> SnapshotDiff {
         tools: diff_items(&before.tools, &after.tools, diff_tool),
         resources: diff_items(&before.resources, &after.resources, diff_resource),
         prompts: diff_items(&before.prompts, &after.prompts, diff_prompt),
+        events: diff_items(&before.events, &after.events, diff_event),
         capabilities: diff_capabilities(&before.capabilities, &after.capabilities),
         protocol_version: pair(&before.protocol_version, &after.protocol_version),
         server_version: pair(&before.server_version, &after.server_version),
@@ -471,6 +489,66 @@ fn diff_tool(before: &Value, after: &Value) -> Vec<FieldChange> {
             &mut out,
         ),
         (None, None) => {}
+    }
+
+    out
+}
+
+/// An event type from the MCP events extension. Its two schemas mirror a
+/// tool's: `inputSchema` is what a subscriber sends (and re-sends on every
+/// webhook refresh), `payloadSchema` is the `data` it receives.
+fn diff_event(before: &Value, after: &Value) -> Vec<FieldChange> {
+    let mut out = Vec::new();
+    let (b, a) = match (before.as_object(), after.as_object()) {
+        (Some(b), Some(a)) => (b, a),
+        _ => return out,
+    };
+
+    diff_prose(b, a, &mut out);
+
+    diff_schema(
+        "inputSchema",
+        b.get("inputSchema").unwrap_or(&Value::Null),
+        a.get("inputSchema").unwrap_or(&Value::Null),
+        Direction::Input,
+        &mut out,
+    );
+    diff_schema(
+        "payloadSchema",
+        b.get("payloadSchema").unwrap_or(&Value::Null),
+        a.get("payloadSchema").unwrap_or(&Value::Null),
+        Direction::Output,
+        &mut out,
+    );
+
+    let modes = |o: &serde_json::Map<String, Value>| -> Vec<Value> {
+        o.get("delivery")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let (before_modes, after_modes) = (modes(b), modes(a));
+    for mode in &before_modes {
+        if !after_modes.contains(mode) {
+            out.push(FieldChange::new(
+                format!("delivery.{}", mode.as_str().unwrap_or_default()),
+                Severity::Breaking,
+                "delivery mode dropped — subscribers using it can no longer subscribe",
+                Some(mode),
+                None,
+            ));
+        }
+    }
+    for mode in &after_modes {
+        if !before_modes.contains(mode) {
+            out.push(FieldChange::new(
+                format!("delivery.{}", mode.as_str().unwrap_or_default()),
+                Severity::Compatible,
+                "delivery mode added",
+                None,
+                Some(mode),
+            ));
+        }
     }
 
     out

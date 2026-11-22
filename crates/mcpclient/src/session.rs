@@ -55,6 +55,11 @@ pub(crate) enum Cmd {
         arguments: Option<JsonObject>,
         reply: Reply<GetPromptResult>,
     },
+    Custom {
+        method: String,
+        params: Option<Value>,
+        reply: Reply<Value>,
+    },
     Shutdown(Reply<()>),
 }
 
@@ -594,6 +599,28 @@ async fn run(
                 tokio::spawn(async move {
                     let params = CallToolRequestParams::new(name).with_arguments(arguments);
                     let _ = reply.send(peer.call_tool(params).await.map_err(request_error));
+                });
+            }
+            Cmd::Custom {
+                method,
+                params,
+                reply,
+            } => {
+                tokio::spawn(async move {
+                    let request = rmcp::model::ClientRequest::CustomRequest(
+                        rmcp::model::CustomRequest::new(method, params),
+                    );
+                    let result = peer.send_request(request).await.map_err(request_error);
+                    // rmcp parses results into an untagged union. Extension results
+                    // land in `CustomResult`; an empty one (`{}`, or only
+                    // `resultType`) matches a typed variant first, which serializes
+                    // back unchanged.
+                    let _ = reply.send(result.and_then(|result| match result {
+                        rmcp::model::ServerResult::CustomResult(custom) => Ok(custom.0),
+                        other => {
+                            serde_json::to_value(other).map_err(|e| Error::Request(e.to_string()))
+                        }
+                    }));
                 });
             }
             Cmd::ReadResource { uri, reply } => {
