@@ -189,7 +189,7 @@ async fn maybe<T>(
     if !supported {
         return Ok(Vec::new());
     }
-    fut.await.map_err(|e| Error::Request(e.to_string()))
+    fut.await.map_err(crate::session::request_error)
 }
 
 /// Index items by their identity, serialising each one whole.
