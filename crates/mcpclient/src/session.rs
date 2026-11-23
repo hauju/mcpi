@@ -348,6 +348,10 @@ fn auth_challenge(error: &ClientInitializeError) -> Option<String> {
         other => other,
     };
 
+    unauthorized_challenge(start)
+}
+
+fn unauthorized_challenge(start: &(dyn std::error::Error + 'static)) -> Option<String> {
     let mut current = Some(start);
     while let Some(link) = current {
         if let Some(auth) = link.downcast_ref::<AuthRequiredError>() {
@@ -652,12 +656,40 @@ async fn run(
     let _ = done.await;
 }
 
-fn request_error(error: rmcp::service::ServiceError) -> Error {
+pub(crate) fn request_error(error: rmcp::service::ServiceError) -> Error {
+    if let rmcp::service::ServiceError::TransportSend(transport) = &error
+        && let Some(challenge) = unauthorized_challenge(transport.error.as_ref())
+    {
+        return Error::AuthRequired {
+            challenge: Some(challenge),
+        };
+    }
     Error::Request(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn requests_preserve_the_401_challenge_and_distinguish_insufficient_scope() {
+        use rmcp::service::ServiceError;
+        use rmcp::transport::DynamicTransportError;
+        use rmcp::transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError};
+        let request_error = |cause| {
+            super::request_error(ServiceError::TransportSend(
+                DynamicTransportError::from_parts("test", std::any::TypeId::of::<()>(), cause),
+            ))
+        };
+        let header = "Bearer resource_metadata=\"https://example.org/metadata\"";
+        assert!(
+            matches!(request_error(Box::new(AuthRequiredError::new(header.into()))),
+            crate::Error::AuthRequired { challenge: Some(actual) } if actual == header)
+        );
+        assert!(matches!(
+            request_error(Box::new(InsufficientScopeError::new(header.into(), None))),
+            crate::Error::Request(_)
+        ));
+    }
+
     /// Guards the TLS backend.
     ///
     /// `use_rustls_tls` is feature-gated in reqwest, so this stops compiling
