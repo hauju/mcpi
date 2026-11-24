@@ -129,7 +129,10 @@ fn text_of(r: &CallToolResult) -> String {
 }
 
 async fn gateway(log: Option<&std::path::Path>) -> Gateway {
-    let base = fake_typesafe().await;
+    gateway_at(fake_typesafe().await, log).await
+}
+
+async fn gateway_at(base: String, log: Option<&std::path::Path>) -> Gateway {
     let jev = Jev::new("test", "fake").unwrap().with_base_url(base);
     let entries = vec![
         entry(
@@ -193,6 +196,37 @@ async fn gateway(log: Option<&std::path::Path>) -> Gateway {
     let g = Gateway::new(Arc::new(Fake { entries }), router, log, notes);
     g.log_catalog().await;
     g
+}
+
+/// TypeSafe down (nothing listening): find_tools still answers, in keyword
+/// order, and says the list is not a ranking.
+#[tokio::test]
+async fn find_tools_survives_a_decision_model_outage() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let g = gateway_at(base, None).await;
+    let found = g
+        .find_tools_in(
+            "t",
+            FindToolsArgs {
+                request: "create a new beta record".into(),
+                k: Some(2),
+            },
+        )
+        .await
+        .expect("an outage is not an error");
+    let body: Value = serde_json::from_str(&text_of(&found)).unwrap();
+    assert_eq!(body["verdict"], "unranked", "{body}");
+    assert!(body["note"].as_str().unwrap().contains("keyword matches"));
+    let names: Vec<&str> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2);
+    assert_eq!(names[0], "beta_create", "{names:?}");
 }
 
 #[tokio::test]

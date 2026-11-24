@@ -98,6 +98,9 @@ pub enum Verdict {
     Uncertain,
     /// The ranking means what it says.
     Ranked,
+    /// The decision model could not be reached: the list is keyword order, not
+    /// a ranking, and `p` is a share of the keyword score.
+    Unranked,
 }
 
 impl Verdict {
@@ -114,6 +117,10 @@ impl Verdict {
                  more specifically. This does not mean none of them fit.",
             ),
             Verdict::Ranked => None,
+            Verdict::Unranked => Some(
+                "The ranking model was unavailable, so these are keyword matches, not a ranking. \
+                 Read the descriptions and pick on the merits.",
+            ),
         }
     }
 }
@@ -274,10 +281,23 @@ impl Router {
         .collect();
 
         let started = Instant::now();
-        let answers = self
+        // A decision-model outage must not take discovery down with it: fall back to the
+        // keyword order the shortlist already has, and say that it is not a ranking.
+        let answers = match self
             .jev
             .system_one(&serde_json::json!({ "request": request }), &questions)
-            .await?;
+            .await
+        {
+            Ok(a) if a.choices.contains_key("pick") => a,
+            Ok(_) => {
+                tracing::warn!("Jev returned no pick; returning keyword order");
+                return Ok(self.keyword_order(entries, &request, &candidates, k, retrieval));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Jev unavailable; returning keyword order");
+                return Ok(self.keyword_order(entries, &request, &candidates, k, retrieval));
+            }
+        };
         let latency_ms = started.elapsed().as_millis() as u64;
 
         let pick = answers
@@ -340,6 +360,53 @@ impl Router {
             latency_ms,
             retrieval,
         })
+    }
+
+    /// `candidates` (shortlist order) as a routing without Jev: the top `k` in keyword
+    /// order. A catalog small enough to skip the shortlist arrives in catalog order, so it
+    /// is sorted by BM25 here; a shortlist keeps its own order, which may carry embedding
+    /// and memory votes BM25 alone would lose.
+    fn keyword_order(
+        &self,
+        entries: &[Entry],
+        request: &str,
+        candidates: &[usize],
+        k: usize,
+        retrieval: Option<RetrievalStats>,
+    ) -> Routing {
+        let fresh;
+        let index = match &self.bm25 {
+            Some(index) => index,
+            None => {
+                fresh = Bm25::new(self.onelines.iter().map(String::as_str));
+                &fresh
+            }
+        };
+        let score: HashMap<usize, f64> = index.ranked(request).into_iter().collect();
+        let of = |i: &usize| score.get(i).copied().unwrap_or(0.0).max(0.0);
+        let mut order = candidates.to_vec();
+        if self.bm25.is_none() {
+            order.sort_by(|a, b| of(b).total_cmp(&of(a)).then_with(|| a.cmp(b)));
+        }
+        let total: f64 = order.iter().map(of).sum();
+        let candidates: Vec<Scored> = order
+            .iter()
+            .map(|i| Scored {
+                key: entries[*i].key.clone(),
+                p: if total > 0.0 { of(i) / total } else { 0.0 },
+            })
+            .collect();
+        Routing {
+            selected: (0..k.min(candidates.len())).collect(),
+            candidates,
+            flat: true,
+            p_none: 0.0,
+            gate: 0.5,
+            verdict: Verdict::Unranked,
+            input_tokens: 0,
+            latency_ms: 0,
+            retrieval,
+        }
     }
 
     /// The catalog indices Jev ranks for `request`: every tool when the catalog fits, else the
@@ -674,6 +741,68 @@ mod tests {
                 (0, 0, None)
             );
         }
+    }
+
+    /// A Jev that answers every request with `status` and `body`.
+    async fn jev_answering(status: &'static str, body: &'static str) -> Jev {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = vec![0; 16384];
+                let _ = sock.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        Jev::new("k", "m").unwrap().with_base_url(base)
+    }
+
+    /// A refused request (non-retryable) and an answer without `pick` both fall back to
+    /// keyword order; a small catalog is sorted by BM25, not left in catalog order.
+    #[tokio::test]
+    async fn a_jev_failure_returns_keyword_order_not_an_error() {
+        let entries: Vec<Entry> = catalog().into_iter().rev().take(SHORTLIST).collect();
+        for jev in [
+            jev_answering("400 Bad Request", r#"{"error":"nope"}"#).await,
+            jev_answering("200 OK", r#"{"answers":{}}"#).await,
+        ] {
+            let r = Router::new(jev, settings(), &entries, None, Vec::new()).await;
+            let routing = r.route(&entries, "send an email", Some(2)).await.unwrap();
+            assert_eq!(routing.verdict, Verdict::Unranked);
+            assert_eq!(routing.selected, vec![0, 1]);
+            assert_eq!(routing.candidates[0].key, "send_email");
+            let sum: f64 = routing.candidates.iter().map(|c| c.p).sum();
+            assert!((sum - 1.0).abs() < 1e-9, "{sum}");
+        }
+    }
+
+    /// With a shortlist, the fallback keeps the shortlist's order: it may carry
+    /// embedding votes that BM25 alone would lose.
+    #[tokio::test]
+    async fn the_fallback_keeps_the_shortlist_order() {
+        let entries = catalog();
+        let jev = jev_answering("400 Bad Request", "{}").await;
+        let r = Router::new(
+            jev,
+            settings(),
+            &entries,
+            Some(Arc::new(Concepts)),
+            Vec::new(),
+        )
+        .await;
+        let (shortlist, _) = r.shortlist(entries.len(), PARAPHRASE).await;
+        let routing = r
+            .route(&entries, PARAPHRASE, Some(SHORTLIST))
+            .await
+            .unwrap();
+        let got: Vec<&str> = routing.candidates.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(got, keys(&entries, &shortlist));
+        assert!(got.contains(&"send_email"));
     }
 
     #[tokio::test]
